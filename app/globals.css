@@ -215,3 +215,55 @@ html, body { background: var(--ink); color: var(--text); font-family: var(--font
   .poh-stats { gap: 1rem; }
   .poh-stat-div { display: none; }
 }
+
+/* ── ROLE SELECT ── */
+.poh-role-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 2rem; }
+
+.poh-role-card { background: var(--ink2); border: 1px solid var(--ink4); border-radius: 14px; padding: 2rem 1.5rem; display: flex; flex-direction: column; align-items: flex-start; gap: 0.6rem; cursor: pointer; text-align: left; transition: border-color 0.2s, background 0.2s; }
+.poh-role-card:hover { background: var(--ink3); }
+.poh-role-host:hover { border-color: var(--gold); }
+.poh-role-guest:hover { border-color: var(--green); }
+
+.poh-role-icon { font-size: 2rem; }
+.poh-role-title { font-family: var(--font-head); font-weight: 800; font-size: 1rem; color: var(--text); }
+.poh-role-desc { font-size: 0.78rem; color: var(--muted); line-height: 1.55; }
+
+.poh-role-or { display: flex; align-items: center; gap: 1rem; margin-bottom: 1.25rem; }
+.poh-role-or-line { flex: 1; height: 1px; background: var(--ink4); }
+.poh-role-or-text { font-family: var(--font-mono); font-size: 0.65rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.1em; white-space: nowrap; }
+
+/* ── CURRENCY AMOUNT ROW ── */
+.poh-amount-row { display: flex; gap: 0; }
+.poh-currency-select { background: var(--ink4); border: 1px solid var(--ink5); border-right: none; border-radius: 8px 0 0 8px; color: var(--text); font-family: var(--font-mono); font-size: 0.82rem; padding: 10px 12px; outline: none; cursor: pointer; min-width: 80px; }
+.poh-currency-select:focus { border-color: var(--red); }
+.poh-amount-input { border-radius: 0 8px 8px 0 !important; }
+
+/* ── SHARE ID SCREEN ── */
+.poh-share-id-block { background: var(--ink3); border: 1px solid var(--ink5); border-radius: 10px; padding: 1.25rem; }
+.poh-share-label { font-size: 0.82rem; color: var(--muted2); margin-bottom: 0.75rem; }
+.poh-share-id-row { display: flex; align-items: center; gap: 1rem; }
+.poh-share-id-num { font-family: var(--font-mono); font-size: 2rem; font-weight: 500; color: var(--gold); letter-spacing: -0.02em; }
+
+.poh-instructions-block { padding: 1rem 0; }
+.poh-instructions-label { font-size: 0.82rem; color: var(--muted2); margin-bottom: 0.6rem; }
+.poh-instructions-list { list-style: none; display: flex; flex-direction: column; gap: 0.5rem; padding: 0; }
+.poh-instructions-list li { font-size: 0.85rem; color: var(--text); padding-left: 1.5rem; position: relative; line-height: 1.5; }
+.poh-instructions-list li::before { content: counter(li); counter-increment: li; position: absolute; left: 0; font-family: var(--font-mono); font-size: 0.7rem; color: var(--red); top: 2px; }
+.poh-instructions-list { counter-reset: li; }
+
+.poh-share-note { display: flex; gap: 0.75rem; align-items: flex-start; background: rgba(201,168,76,0.06); border: 1px solid rgba(201,168,76,0.15); border-radius: 8px; padding: 0.875rem 1rem; font-size: 0.82rem; color: var(--muted2); line-height: 1.6; }
+.poh-share-note-icon { font-size: 1rem; flex-shrink: 0; margin-top: 1px; }
+
+/* ── INFO STRIP ── */
+.poh-info-strip { background: var(--ink3); border-radius: 6px; padding: 0.6rem 0.875rem; display: flex; gap: 0.75rem; align-items: baseline; }
+.poh-info-label { font-family: var(--font-mono); font-size: 0.65rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; white-space: nowrap; }
+.poh-info-val { font-size: 0.82rem; color: var(--muted2); }
+
+/* ── SHARE VERDICT CARD ── */
+.poh-share-verdict-card { border-color: var(--ink5); }
+
+/* ── ROLE CARD RESPONSIVE ── */
+@media (max-width: 600px) {
+  .poh-role-grid { grid-template-columns: 1fr; }
+  .poh-share-id-row { flex-direction: column; align-items: flex-start; gap: 0.75rem; }
+}
