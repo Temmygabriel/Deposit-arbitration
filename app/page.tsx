@@ -6,7 +6,20 @@ import { TransactionStatus } from "genlayer-js/types";
 
 const CONTRACT_ADDRESS = "0xeD99D46A13C0A1457497cb51F28eF7626Cea5Eab";
 
-type Screen = "home" | "create" | "host" | "guest" | "pending" | "verdict";
+// Screens in the flow
+type Screen =
+  | "home"
+  | "role_select"   // NEW: pick Host or Guest before anything
+  | "create"        // Step 1: dispute details (whoever files first)
+  | "my_claim"      // Step 2: filer submits their own claim right after creating
+  | "share_id"      // NEW: show dispute ID + instructions to share with other party
+  | "other_claim"   // Step 3: other party loads ID and submits their claim
+  | "pending"       // Step 4: request verdict
+  | "verdict";
+
+type Role = "host" | "guest" | null;
+
+const CURRENCIES = ["NGN", "USD", "GBP", "EUR", "KES", "GHS", "ZAR", "AED"];
 
 interface DisputeState {
   dispute_id: number;
@@ -103,57 +116,106 @@ function Logo({ size = 32 }: { size?: number }) {
 
 export default function Home() {
   const [screen, setScreen] = useState<Screen>("home");
+  const [myRole, setMyRole] = useState<Role>(null);
   const [loading, setLoading] = useState(false);
   const [loadingMsg, setLoadingMsg] = useState("");
   const [disputeId, setDisputeId] = useState<number | null>(null);
   const [dispute, setDispute] = useState<DisputeState | null>(null);
   const [error, setError] = useState("");
+  const [copied, setCopied] = useState(false);
+  const [verdictCopied, setVerdictCopied] = useState(false);
 
+  // Form fields
   const [propertyAddress, setPropertyAddress] = useState("");
   const [depositAmount, setDepositAmount] = useState("");
+  const [currency, setCurrency] = useState("NGN");
   const [hostName, setHostName] = useState("");
   const [guestName, setGuestName] = useState("");
   const [agreementTerms, setAgreementTerms] = useState("");
-  const [hostClaim, setHostClaim] = useState("");
-  const [hostEvidence, setHostEvidence] = useState("");
-  const [guestClaim, setGuestClaim] = useState("");
-  const [guestEvidence, setGuestEvidence] = useState("");
+  const [myClaim, setMyClaim] = useState("");
+  const [myEvidence, setMyEvidence] = useState("");
   const [loadId, setLoadId] = useState("");
 
   const reset = useCallback(() => {
     setScreen("home");
+    setMyRole(null);
     setDisputeId(null);
     setDispute(null);
     setError("");
-    setPropertyAddress(""); setDepositAmount(""); setHostName(""); setGuestName(""); setAgreementTerms("");
-    setHostClaim(""); setHostEvidence(""); setGuestClaim(""); setGuestEvidence(""); setLoadId("");
+    setCopied(false);
+    setVerdictCopied(false);
+    setPropertyAddress(""); setDepositAmount(""); setCurrency("NGN");
+    setHostName(""); setGuestName(""); setAgreementTerms("");
+    setMyClaim(""); setMyEvidence(""); setLoadId("");
   }, []);
 
+  // Step 1: Create the dispute (works for both host and guest filer)
   const handleCreateDispute = async () => {
-    if (!propertyAddress || !depositAmount || !hostName || !guestName || !agreementTerms) { setError("Please fill in all fields"); return; }
+    if (!propertyAddress || !depositAmount || !hostName || !guestName || !agreementTerms) {
+      setError("Please fill in all fields"); return;
+    }
     setError(""); setLoading(true); setLoadingMsg("Creating dispute on the blockchain...");
     const countBefore = await readDisputeCount();
-    const ok = await writeContract("create_dispute", [propertyAddress, depositAmount, hostName, guestName, agreementTerms]);
+    const amountWithCurrency = `${depositAmount} ${currency}`;
+    const ok = await writeContract("create_dispute", [propertyAddress, amountWithCurrency, hostName, guestName, agreementTerms]);
     if (!ok) { setError("Transaction failed. Please try again."); setLoading(false); return; }
-    setDisputeId(countBefore + 1); setLoading(false); setScreen("host");
+    setDisputeId(countBefore + 1);
+    setLoading(false);
+    setScreen("my_claim"); // Go straight to submitting their own claim
   };
 
-  const handleHostClaim = async () => {
-    if (!hostClaim || !hostEvidence) { setError("Please fill in both fields"); return; }
+  // Step 2: Filer submits their own claim
+  const handleMyClaim = async () => {
+    if (!myClaim || !myEvidence) { setError("Please fill in both fields"); return; }
     if (!disputeId) return;
-    setError(""); setLoading(true); setLoadingMsg("Submitting host claim onchain...");
-    const ok = await writeContract("submit_landlord_claim", [disputeId, hostClaim, hostEvidence]);
-    if (!ok) { setError("Transaction failed. Please try again."); setLoading(false); return; }
-    setLoading(false); setScreen("guest");
+    setError(""); setLoading(true);
+    if (myRole === "host") {
+      setLoadingMsg("Submitting your claim onchain...");
+      const ok = await writeContract("submit_landlord_claim", [disputeId, myClaim, myEvidence]);
+      if (!ok) { setError("Transaction failed. Please try again."); setLoading(false); return; }
+    } else {
+      setLoadingMsg("Submitting your claim onchain...");
+      const ok = await writeContract("submit_tenant_claim", [disputeId, myClaim, myEvidence]);
+      if (!ok) { setError("Transaction failed. Please try again."); setLoading(false); return; }
+    }
+    setLoading(false);
+    setScreen("share_id"); // Show the ID to share with the other party
   };
 
-  const handleGuestClaim = async () => {
-    if (!guestClaim || !guestEvidence) { setError("Please fill in both fields"); return; }
+  // Other party loads dispute by ID and submits their claim
+  const handleLoadForOtherClaim = async () => {
+    const id = parseInt(loadId);
+    if (isNaN(id) || id < 1) { setError("Please enter a valid dispute ID"); return; }
+    setError(""); setLoading(true); setLoadingMsg("Loading dispute...");
+    const state = await readDispute(id);
+    if (!state) { setError("Dispute not found. Check the ID and try again."); setLoading(false); return; }
+    setDisputeId(id); setDispute(state); setLoading(false);
+    if (state.status === "resolved") {
+      setScreen("verdict");
+    } else {
+      setScreen("other_claim");
+    }
+  };
+
+  // Other party submits their claim
+  const handleOtherClaim = async () => {
+    if (!myClaim || !myEvidence) { setError("Please fill in both fields"); return; }
     if (!disputeId) return;
-    setError(""); setLoading(true); setLoadingMsg("Submitting guest response onchain...");
-    const ok = await writeContract("submit_tenant_claim", [disputeId, guestClaim, guestEvidence]);
-    if (!ok) { setError("Transaction failed. Please try again."); setLoading(false); return; }
-    setLoading(false); setScreen("pending");
+    setError(""); setLoading(true);
+    // Other party is the opposite of myRole
+    if (myRole === "host") {
+      // I'm the host who loaded, so I submit guest claim
+      setLoadingMsg("Submitting guest response onchain...");
+      const ok = await writeContract("submit_tenant_claim", [disputeId, myClaim, myEvidence]);
+      if (!ok) { setError("Transaction failed. Please try again."); setLoading(false); return; }
+    } else {
+      // I'm the guest who loaded, so I submit host claim
+      setLoadingMsg("Submitting host claim onchain...");
+      const ok = await writeContract("submit_landlord_claim", [disputeId, myClaim, myEvidence]);
+      if (!ok) { setError("Transaction failed. Please try again."); setLoading(false); return; }
+    }
+    setLoading(false);
+    setScreen("pending");
   };
 
   const handleRequestVerdict = async () => {
@@ -177,6 +239,27 @@ export default function Home() {
     setScreen(state.status === "resolved" ? "verdict" : "pending");
   };
 
+  const copyDisputeId = () => {
+    if (disputeId) {
+      navigator.clipboard.writeText(String(disputeId));
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  };
+
+  const copyVerdictLink = () => {
+    navigator.clipboard.writeText(`Proof of Handshake — Dispute #${disputeId}\nVerdict: ${dispute?.winner === "tenant" ? "GUEST WINS" : "HOST WINS"}\nRuling: ${dispute?.verdict}\nView at: ${window.location.href}\nDispute ID: ${disputeId}`);
+    setVerdictCopied(true);
+    setTimeout(() => setVerdictCopied(false), 2500);
+  };
+
+  // Labels based on role
+  const myLabel = myRole === "host" ? "Host" : "Guest";
+  const otherLabel = myRole === "host" ? "Guest" : "Host";
+  const myIcon = myRole === "host" ? "🏠" : "👤";
+  const otherIcon = myRole === "host" ? "👤" : "🏠";
+  const myTagClass = myRole === "host" ? "poh-host-tag" : "poh-guest-tag";
+
   return (
     <main className="poh-main">
       <nav className="poh-nav">
@@ -187,7 +270,7 @@ export default function Home() {
           </div>
           <div className="poh-nav-right">
             {screen !== "home" && <button className="poh-btn-ghost" onClick={reset}>← Home</button>}
-            {screen === "home" && <button className="poh-btn-red" onClick={() => setScreen("create")}>File a Dispute →</button>}
+            {screen === "home" && <button className="poh-btn-red" onClick={() => setScreen("role_select")}>File a Dispute →</button>}
           </div>
         </div>
       </nav>
@@ -204,6 +287,7 @@ export default function Home() {
 
       <div className="poh-content">
 
+        {/* ── HOME ── */}
         {screen === "home" && (
           <div className="poh-home">
             <section className="poh-hero">
@@ -215,7 +299,7 @@ export default function Home() {
                 <h1 className="poh-h1">Your deposit.<br />Your rights.<br /><span className="poh-red">Proven onchain.</span></h1>
                 <p className="poh-hero-p">When your shortlet host refuses to return your caution fee, you deserve more than an argument. You deserve a verdict — transparent, reasoned, and stored permanently on the blockchain.</p>
                 <div className="poh-hero-btns">
-                  <button className="poh-btn-red" onClick={() => setScreen("create")}>File a New Dispute →</button>
+                  <button className="poh-btn-red" onClick={() => setScreen("role_select")}>File a New Dispute →</button>
                   <button className="poh-btn-outline" onClick={() => setScreen("pending")}>Load Existing Dispute</button>
                 </div>
               </div>
@@ -242,7 +326,7 @@ export default function Home() {
             </section>
 
             <div className="poh-stats">
-              {[["5","AI Validators"],["~60s","To Verdict"],["100%","Onchain & Transparent"],["₦0","Arbitration Fee"]].map(([n,l],i,a) => (
+              {[["5","AI Validators"],["~60s","To Verdict"],["100%","Onchain & Transparent"],["$0","Arbitration Fee"]].map(([n,l],i,a) => (
                 <div key={l} style={{display:"flex",alignItems:"center",gap:"2rem"}}>
                   <div className="poh-stat"><div className="poh-stat-num">{n}</div><div className="poh-stat-label">{l}</div></div>
                   {i < a.length-1 && <div className="poh-stat-div" />}
@@ -254,9 +338,9 @@ export default function Home() {
               <div className="poh-section-label">The process</div>
               <div className="poh-flow-grid">
                 {[
-                  {n:"01",icon:"📋",title:"File the dispute",desc:"Enter property, deposit amount, and original agreement terms"},
-                  {n:"02",icon:"🏠",title:"Host submits claim",desc:"Host states why they are withholding the caution fee with evidence"},
-                  {n:"03",icon:"👤",title:"Guest responds",desc:"Guest submits their counter-claim and supporting evidence"},
+                  {n:"01",icon:"🎭",title:"Choose your role",desc:"Are you the Host or the Guest? Each party files independently from their own device"},
+                  {n:"02",icon:"📋",title:"File the dispute",desc:"Whoever starts first enters property details and their side of the story"},
+                  {n:"03",icon:"📲",title:"Share the ID",desc:"The dispute ID is shared with the other party — they respond from their own device"},
                   {n:"04",icon:"⚖️",title:"AI consensus verdict",desc:"5 validators independently evaluate and reach a majority ruling onchain"},
                 ].map(s => (
                   <div key={s.n} className="poh-flow-step">
@@ -273,7 +357,7 @@ export default function Home() {
               <div className="poh-section-label">Live verdict example</div>
               <div className="poh-verdict-box">
                 <div className="poh-verdict-hdr">
-                  <span className="poh-verdict-id">Dispute #1 · 12 Adewale Street Lagos · ₦150,000</span>
+                  <span className="poh-verdict-id">Dispute #1 · 12 Adewale Street Lagos · 150,000 NGN</span>
                   <span className="poh-win-badge">✓ GUEST WINS</span>
                 </div>
                 <div className="poh-verdict-body">
@@ -286,7 +370,7 @@ export default function Home() {
             </div>
 
             <div className="poh-load-box">
-              <p className="poh-load-label">Already have a dispute ID?</p>
+              <p className="poh-load-label">Already have a dispute ID? Load it here →</p>
               <div className="poh-load-row">
                 <input className="poh-input" placeholder="Enter dispute ID e.g. 1" value={loadId} onChange={e=>setLoadId(e.target.value)} />
                 <button className="poh-btn-red" onClick={handleLoadDispute}>Load →</button>
@@ -296,67 +380,226 @@ export default function Home() {
           </div>
         )}
 
+        {/* ── ROLE SELECT ── NEW SCREEN ── */}
+        {screen === "role_select" && (
+          <div className="poh-form-wrap">
+            <div className="poh-form-hdr">
+              <div className="poh-step-tag">Before we begin</div>
+              <h2 className="poh-form-title">Who are you in this dispute?</h2>
+              <p className="poh-form-sub">Each party files from their own device. Choose your role — the other party will respond separately using the dispute ID you share with them.</p>
+            </div>
+            <div className="poh-role-grid">
+              <button
+                className="poh-role-card poh-role-host"
+                onClick={() => { setMyRole("host"); setScreen("create"); }}
+              >
+                <span className="poh-role-icon">🏠</span>
+                <span className="poh-role-title">I am the Host</span>
+                <span className="poh-role-desc">I own or manage the property and I&apos;m disputing a refund claim</span>
+              </button>
+              <button
+                className="poh-role-card poh-role-guest"
+                onClick={() => { setMyRole("guest"); setScreen("create"); }}
+              >
+                <span className="poh-role-icon">👤</span>
+                <span className="poh-role-title">I am the Guest</span>
+                <span className="poh-role-desc">I stayed at the property and my caution fee was withheld unfairly</span>
+              </button>
+            </div>
+            <div className="poh-role-or">
+              <span className="poh-role-or-line" />
+              <span className="poh-role-or-text">already have a dispute ID?</span>
+              <span className="poh-role-or-line" />
+            </div>
+            <div className="poh-load-box" style={{marginTop: 0}}>
+              <p className="poh-load-label">The other party already filed — enter their ID to respond</p>
+              <div className="poh-load-row">
+                <input className="poh-input" placeholder="Enter dispute ID e.g. 1" value={loadId} onChange={e=>setLoadId(e.target.value)} />
+                <button className="poh-btn-red" onClick={() => {
+                  if (!myRole) { setError("Please select your role above first"); return; }
+                  handleLoadForOtherClaim();
+                }}>Respond →</button>
+              </div>
+              {error && <p className="poh-error">{error}</p>}
+              <p style={{fontSize:"0.75rem", color:"var(--muted)", marginTop:"0.5rem"}}>Make sure you&apos;ve selected your role above before loading</p>
+            </div>
+          </div>
+        )}
+
+        {/* ── CREATE DISPUTE ── */}
         {screen === "create" && (
           <div className="poh-form-wrap">
             <div className="poh-form-hdr">
-              <div className="poh-step-tag">Step 1 of 4</div>
+              <div className="poh-step-tag">Step 1 of 3 · Filing as {myLabel}</div>
               <h2 className="poh-form-title">File the Dispute</h2>
-              <p className="poh-form-sub">Enter the shortlet property details and original agreement</p>
+              <p className="poh-form-sub">Enter the property details and original agreement terms</p>
             </div>
             <div className="poh-card">
-              <div className="poh-field"><label>Property Address</label><input className="poh-input" placeholder="e.g. 12 Adewale Street, Lekki, Lagos" value={propertyAddress} onChange={e=>setPropertyAddress(e.target.value)} /></div>
-              <div className="poh-field"><label>Caution Fee / Deposit Amount</label><input className="poh-input" placeholder="e.g. 150,000 NGN" value={depositAmount} onChange={e=>setDepositAmount(e.target.value)} /></div>
-              <div className="poh-field-row">
-                <div className="poh-field"><label>Host Name</label><input className="poh-input" placeholder="e.g. Mr Bello" value={hostName} onChange={e=>setHostName(e.target.value)} /></div>
-                <div className="poh-field"><label>Guest Name</label><input className="poh-input" placeholder="e.g. Miss Tunde" value={guestName} onChange={e=>setGuestName(e.target.value)} /></div>
+              <div className="poh-field">
+                <label>Property Address</label>
+                <input className="poh-input" placeholder="e.g. 12 Adewale Street, Lekki, Lagos" value={propertyAddress} onChange={e=>setPropertyAddress(e.target.value)} />
               </div>
-              <div className="poh-field"><label>Original Agreement Terms</label><textarea className="poh-textarea" placeholder="Describe the original shortlet terms — what the caution fee covers, conditions for refund, check-in/check-out rules, etc." value={agreementTerms} onChange={e=>setAgreementTerms(e.target.value)} rows={4} /></div>
+
+              {/* Currency + Amount row */}
+              <div className="poh-field">
+                <label>Caution Fee / Deposit Amount</label>
+                <div className="poh-amount-row">
+                  <select className="poh-currency-select" value={currency} onChange={e=>setCurrency(e.target.value)}>
+                    {CURRENCIES.map(c => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                  <input className="poh-input poh-amount-input" placeholder="e.g. 150,000" value={depositAmount} onChange={e=>setDepositAmount(e.target.value)} />
+                </div>
+              </div>
+
+              <div className="poh-field-row">
+                <div className="poh-field">
+                  <label>Host Name</label>
+                  <input className="poh-input" placeholder="e.g. Mr Bello" value={hostName} onChange={e=>setHostName(e.target.value)} />
+                </div>
+                <div className="poh-field">
+                  <label>Guest Name</label>
+                  <input className="poh-input" placeholder="e.g. Miss Tunde" value={guestName} onChange={e=>setGuestName(e.target.value)} />
+                </div>
+              </div>
+              <div className="poh-field">
+                <label>Original Agreement Terms</label>
+                <textarea className="poh-textarea" placeholder="Describe the original shortlet terms — what the caution fee covers, conditions for refund, check-in/check-out rules, etc." value={agreementTerms} onChange={e=>setAgreementTerms(e.target.value)} rows={4} />
+              </div>
               {error && <p className="poh-error">{error}</p>}
               <button className="poh-btn-red poh-btn-full" onClick={handleCreateDispute}>Create Dispute & Continue →</button>
             </div>
           </div>
         )}
 
-        {screen === "host" && (
+        {/* ── MY CLAIM (filer submits their side right away) ── */}
+        {screen === "my_claim" && (
           <div className="poh-form-wrap">
             <div className="poh-form-hdr">
-              <div className="poh-step-tag">Step 2 of 4</div>
-              <h2 className="poh-form-title">Host&apos;s Claim</h2>
-              <p className="poh-form-sub">Dispute ID: <strong className="poh-id-badge">#{disputeId}</strong> — Share this ID with the guest</p>
+              <div className="poh-step-tag">Step 2 of 3 · Your Side</div>
+              <h2 className="poh-form-title">{myLabel}&apos;s Claim</h2>
+              <p className="poh-form-sub">Dispute ID: <strong className="poh-id-badge">#{disputeId}</strong> — Submit your side now</p>
             </div>
             <div className="poh-card">
-              <div className="poh-party-tag poh-host-tag">🏠 Host&apos;s Side</div>
-              <div className="poh-field"><label>Your Claim</label><textarea className="poh-textarea" placeholder="Describe why you are withholding the caution fee. Be specific about what damage occurred during the guest's stay." value={hostClaim} onChange={e=>setHostClaim(e.target.value)} rows={4} /></div>
-              <div className="poh-field"><label>Your Evidence</label><textarea className="poh-textarea" placeholder="List your evidence — checkout photos, repair invoices, inspection reports, messages, etc." value={hostEvidence} onChange={e=>setHostEvidence(e.target.value)} rows={4} /></div>
+              <div className={`poh-party-tag ${myTagClass}`}>{myIcon} {myLabel}&apos;s Side</div>
+              <div className="poh-field">
+                <label>Your Claim</label>
+                <textarea
+                  className="poh-textarea"
+                  placeholder={myRole === "host"
+                    ? "Describe why you are withholding the caution fee. Be specific about what damage occurred."
+                    : "Describe why the caution fee should be refunded. Be specific about your stay and check-out condition."}
+                  value={myClaim} onChange={e=>setMyClaim(e.target.value)} rows={4}
+                />
+              </div>
+              <div className="poh-field">
+                <label>Your Evidence</label>
+                <textarea
+                  className="poh-textarea"
+                  placeholder={myRole === "host"
+                    ? "List your evidence — checkout photos, repair invoices, inspection reports, messages, etc."
+                    : "List your evidence — check-in photos, messages from host, receipts, WhatsApp screenshots, etc."}
+                  value={myEvidence} onChange={e=>setMyEvidence(e.target.value)} rows={4}
+                />
+              </div>
               {error && <p className="poh-error">{error}</p>}
-              <button className="poh-btn-red poh-btn-full" onClick={handleHostClaim}>Submit Host Claim →</button>
+              <button className="poh-btn-red poh-btn-full" onClick={handleMyClaim}>Submit My Claim →</button>
             </div>
           </div>
         )}
 
-        {screen === "guest" && (
+        {/* ── SHARE ID ── NEW SCREEN ── */}
+        {screen === "share_id" && (
           <div className="poh-form-wrap">
             <div className="poh-form-hdr">
-              <div className="poh-step-tag">Step 3 of 4</div>
-              <h2 className="poh-form-title">Guest&apos;s Response</h2>
-              <p className="poh-form-sub">Dispute ID: <strong className="poh-id-badge">#{disputeId}</strong></p>
+              <div className="poh-step-tag">Step 3 of 3 · Share with {otherLabel}</div>
+              <h2 className="poh-form-title">Your claim is sealed ✓</h2>
+              <p className="poh-form-sub">Now the {otherLabel} needs to respond from their own device.</p>
             </div>
             <div className="poh-card">
-              <div className="poh-party-tag poh-guest-tag">👤 Guest&apos;s Side</div>
-              <div className="poh-field"><label>Your Claim</label><textarea className="poh-textarea" placeholder="Describe why the caution fee should be refunded. Be specific about your stay." value={guestClaim} onChange={e=>setGuestClaim(e.target.value)} rows={4} /></div>
-              <div className="poh-field"><label>Your Evidence</label><textarea className="poh-textarea" placeholder="List your evidence — check-in photos, messages from host, receipts, WhatsApp screenshots, etc." value={guestEvidence} onChange={e=>setGuestEvidence(e.target.value)} rows={4} /></div>
-              {error && <p className="poh-error">{error}</p>}
-              <button className="poh-btn-red poh-btn-full" onClick={handleGuestClaim}>Submit Guest Response →</button>
+              <div className="poh-share-id-block">
+                <p className="poh-share-label">Share this Dispute ID with the {otherLabel}:</p>
+                <div className="poh-share-id-row">
+                  <div className="poh-share-id-num">#{disputeId}</div>
+                  <button className="poh-btn-outline" onClick={copyDisputeId}>
+                    {copied ? "✓ Copied!" : "Copy ID"}
+                  </button>
+                </div>
+              </div>
+
+              <div className="poh-instructions-block">
+                <p className="poh-instructions-label">Tell the {otherLabel} to:</p>
+                <ol className="poh-instructions-list">
+                  <li>Go to this website</li>
+                  <li>Click &ldquo;File a Dispute&rdquo; → choose <strong>&ldquo;I am the {otherLabel}&rdquo;</strong></li>
+                  <li>Enter dispute ID <strong className="poh-id-badge">#{disputeId}</strong></li>
+                  <li>Submit their side of the story</li>
+                </ol>
+              </div>
+
+              <div className="poh-share-note">
+                <span className="poh-share-note-icon">💬</span>
+                <span>Send via WhatsApp, SMS, email — whatever works. They only need the ID number.</span>
+              </div>
+
+              <div style={{borderTop:"1px solid var(--ink4)", paddingTop:"1.25rem"}}>
+                <p style={{fontSize:"0.82rem", color:"var(--muted2)", marginBottom:"0.75rem"}}>Once the {otherLabel} has responded, come back here to request the AI verdict:</p>
+                <button className="poh-btn-red poh-btn-full" onClick={() => setScreen("pending")}>
+                  {otherIcon} I&apos;m the {otherLabel} — I&apos;ve responded, request verdict →
+                </button>
+              </div>
             </div>
           </div>
         )}
 
+        {/* ── OTHER PARTY CLAIM ── */}
+        {screen === "other_claim" && dispute && (
+          <div className="poh-form-wrap">
+            <div className="poh-form-hdr">
+              <div className="poh-step-tag">Responding to Dispute #{disputeId}</div>
+              <h2 className="poh-form-title">{myLabel}&apos;s Response</h2>
+              <p className="poh-form-sub">
+                Dispute between <strong>{dispute.landlord_name}</strong> (Host) and <strong>{dispute.tenant_name}</strong> (Guest) · {dispute.deposit_amount}
+              </p>
+            </div>
+            <div className="poh-card">
+              <div className={`poh-party-tag ${myTagClass}`}>{myIcon} {myLabel}&apos;s Side</div>
+              <div className="poh-info-strip">
+                <span className="poh-info-label">Property</span>
+                <span className="poh-info-val">{dispute.property_address}</span>
+              </div>
+              <div className="poh-field">
+                <label>Your Claim</label>
+                <textarea
+                  className="poh-textarea"
+                  placeholder={myRole === "guest"
+                    ? "Describe why the caution fee should be refunded. Be specific about your stay."
+                    : "Describe why you are withholding the caution fee. Be specific about what damage occurred."}
+                  value={myClaim} onChange={e=>setMyClaim(e.target.value)} rows={4}
+                />
+              </div>
+              <div className="poh-field">
+                <label>Your Evidence</label>
+                <textarea
+                  className="poh-textarea"
+                  placeholder={myRole === "guest"
+                    ? "List your evidence — check-in photos, messages, receipts, WhatsApp screenshots, etc."
+                    : "List your evidence — damage photos, repair invoices, inspection reports, messages, etc."}
+                  value={myEvidence} onChange={e=>setMyEvidence(e.target.value)} rows={4}
+                />
+              </div>
+              {error && <p className="poh-error">{error}</p>}
+              <button className="poh-btn-red poh-btn-full" onClick={handleOtherClaim}>Submit My Response →</button>
+            </div>
+          </div>
+        )}
+
+        {/* ── PENDING / REQUEST VERDICT ── */}
         {screen === "pending" && (
           <div className="poh-form-wrap">
             <div className="poh-form-hdr">
-              <div className="poh-step-tag">Step 4 of 4</div>
-              <h2 className="poh-form-title">Request the Verdict</h2>
-              <p className="poh-form-sub">Both claims are on-chain. Ready to summon the AI judges.</p>
+              <div className="poh-step-tag">Final Step · Request Verdict</div>
+              <h2 className="poh-form-title">Summon the Judges</h2>
+              <p className="poh-form-sub">Both claims are on-chain. Ready to call the AI panel.</p>
             </div>
             <div className="poh-card">
               <div className="poh-validators-block">
@@ -380,13 +623,16 @@ export default function Home() {
           </div>
         )}
 
+        {/* ── VERDICT ── */}
         {screen === "verdict" && dispute && (
           <div className="poh-verdict-screen">
             <div className={`poh-verdict-banner ${dispute.winner==="tenant"?"poh-guest-wins":"poh-host-wins"}`}>
               <div className="poh-verdict-seal"><Logo size={52} /></div>
               <div className="poh-verdict-winner">{dispute.winner==="tenant"?"Guest Wins":"Host Wins"}</div>
               <div className="poh-verdict-deposit">
-                {dispute.winner==="tenant" ? `Caution fee of ${dispute.deposit_amount} should be refunded to the guest` : `Host may retain caution fee of ${dispute.deposit_amount}`}
+                {dispute.winner==="tenant"
+                  ? `Caution fee of ${dispute.deposit_amount} should be refunded to the guest`
+                  : `Host may retain caution fee of ${dispute.deposit_amount}`}
               </div>
             </div>
             <div className="poh-verdict-cards">
@@ -411,6 +657,20 @@ export default function Home() {
                 </div>
                 <div className="poh-contract-ref">Contract: <span className="poh-mono">{CONTRACT_ADDRESS.slice(0,10)}...{CONTRACT_ADDRESS.slice(-6)}</span></div>
               </div>
+
+              {/* Share verdict */}
+              <div className="poh-vcard poh-share-verdict-card">
+                <h3>📤 Share This Verdict</h3>
+                <p style={{fontSize:"0.82rem", color:"var(--muted2)", marginBottom:"1rem"}}>Both parties can view the result using Dispute ID <strong className="poh-id-badge">#{dispute.dispute_id}</strong> — share it as evidence or for your records.</p>
+                <div style={{display:"flex", gap:"0.75rem", flexWrap:"wrap"}}>
+                  <button className="poh-btn-outline" onClick={copyVerdictLink}>
+                    {verdictCopied ? "✓ Copied to clipboard!" : "📋 Copy verdict summary"}
+                  </button>
+                  <button className="poh-btn-ghost" onClick={() => window.print()}>
+                    🖨️ Print / Save as PDF
+                  </button>
+                </div>
+              </div>
             </div>
             <button className="poh-btn-red" onClick={reset}>File Another Dispute →</button>
           </div>
@@ -420,7 +680,7 @@ export default function Home() {
 
       <footer className="poh-footer">
         <div className="poh-footer-logo"><Logo size={18} /><span className="poh-footer-name">Proof of Handshake</span></div>
-        <p className="poh-footer-right">Built on GenLayer · Onchain Justice Track · Bradbury Builders Hackathon 2026</p>
+        <p className="poh-footer-right">Built on GenLayer · Onchain Justice Track · Bradbury Builders Hackathon 2025</p>
       </footer>
     </main>
   );
