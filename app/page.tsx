@@ -33,7 +33,6 @@ type Screen =
 // What the status screen found when it last checked
 type DisputeStatus =
   | "idle"              // Haven't checked yet
-  | "checking"          // Currently reading chain
   | "waiting_other"     // Other party hasn't filed
   | "ready_verdict"     // Both filed, no verdict yet
   | "resolved";         // Verdict exists
@@ -138,6 +137,7 @@ export default function Home() {
   const [disputeId, setDisputeId] = useState<number | null>(null);
   const [dispute, setDispute] = useState<DisputeState | null>(null);
   const [disputeStatus, setDisputeStatus] = useState<DisputeStatus>("idle");
+  const [statusChecking, setStatusChecking] = useState(false);
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
   const [verdictCopied, setVerdictCopied] = useState(false);
@@ -154,7 +154,7 @@ export default function Home() {
 
   const reset = useCallback(() => {
     setScreen("home"); setMyRole(null); setDisputeId(null); setDispute(null);
-    setDisputeStatus("idle"); setError(""); setCopied(false); setVerdictCopied(false);
+    setDisputeStatus("idle"); setStatusChecking(false); setError(""); setCopied(false); setVerdictCopied(false);
     setPropertyAddress(""); setDepositAmount(""); setCurrency("NGN");
     setHostName(""); setGuestName(""); setAgreementTerms("");
     setMyClaim(""); setMyEvidence(""); setLoadId("");
@@ -164,9 +164,10 @@ export default function Home() {
   // Reads the chain for a dispute ID and updates status state
   // If resolved → navigates to verdict. Otherwise → navigates to status screen.
   const checkStatus = useCallback(async (id: number, navigateToStatus = true) => {
-    setDisputeStatus("checking");
+    setStatusChecking(true);
     const state = await readDispute(id);
     if (!state) {
+      setStatusChecking(false);
       setDisputeStatus("idle");
       setError("Could not read dispute. Check the ID and try again.");
       return;
@@ -174,6 +175,7 @@ export default function Home() {
     setDispute(state);
     const ds = getDisputeStatus(state);
     setDisputeStatus(ds);
+    setStatusChecking(false);
     if (ds === "resolved") {
       setScreen("verdict");
     } else if (navigateToStatus) {
@@ -602,10 +604,10 @@ export default function Home() {
                     <p className="poh-status-check-label">Once they&apos;ve responded, press this to check:</p>
                     <button
                       className="poh-btn-red poh-btn-full"
-                      disabled={disputeStatus === "checking"}
+                      disabled={statusChecking}
                       onClick={async () => { if (disputeId) await checkStatus(disputeId); }}
                     >
-                      {disputeStatus === "checking" ? "Checking..." : `Check if ${knownRole ? otherLabel : "Other Party"} Has Responded →`}
+                      {statusChecking ? "Checking..." : `Check if ${knownRole ? otherLabel : "Other Party"} Has Responded →`}
                     </button>
                   </div>
                   {error && <p className="poh-error">{error}</p>}
@@ -638,22 +640,6 @@ export default function Home() {
                   </div>
                   {error && <p className="poh-error">{error}</p>}
                   <button className="poh-btn-red poh-btn-full poh-btn-gavel" onClick={handleRequestVerdict}>⚖️ Request AI Verdict</button>
-                </div>
-              </>
-            )}
-
-            {/* CHECKING state — spinner while reading chain */}
-            {disputeStatus === "checking" && (
-              <>
-                <div className="poh-form-hdr">
-                  <div className="poh-step-tag">Dispute #{disputeId}</div>
-                  <h2 className="poh-form-title">Checking status...</h2>
-                </div>
-                <div className="poh-card">
-                  <div className="poh-waiting-block">
-                    <div className="poh-seal-spin" style={{display:"inline-block"}}><Logo size={48} /></div>
-                    <p className="poh-waiting-text">Reading the blockchain...</p>
-                  </div>
                 </div>
               </>
             )}
