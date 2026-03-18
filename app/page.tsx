@@ -6,16 +6,37 @@ import { TransactionStatus } from "genlayer-js/types";
 
 const CONTRACT_ADDRESS = "0xeD99D46A13C0A1457497cb51F28eF7626Cea5Eab";
 
-// Screens in the flow
+/**
+ * FLOW A — Starting a new dispute
+ *   home → role_select → create → my_claim → status
+ *
+ * FLOW B — Responding to existing dispute
+ *   home → role_select → [enter ID] → respond_claim → status
+ *
+ * FLOW C — Coming back later (just have an ID)
+ *   home → [enter ID] → status (smart screen detects everything)
+ *
+ * STATUS SCREEN is the smart hub. It reads the chain and shows:
+ *   - "Other party hasn't responded" → reminder + Check Again button
+ *   - "Both filed, no verdict yet" → Request Verdict button
+ *   - "Verdict exists" → auto-navigates to verdict screen
+ */
 type Screen =
   | "home"
-  | "role_select"   // NEW: pick Host or Guest before anything
-  | "create"        // Step 1: dispute details (whoever files first)
-  | "my_claim"      // Step 2: filer submits their own claim right after creating
-  | "share_id"      // NEW: show dispute ID + instructions to share with other party
-  | "other_claim"   // Step 3: other party loads ID and submits their claim
-  | "pending"       // Step 4: request verdict
+  | "role_select"
+  | "create"
+  | "my_claim"
+  | "respond_claim"
+  | "status"       // Smart hub — replaces share_id, await_other, await_verdict
   | "verdict";
+
+// What the status screen found when it last checked
+type DisputeStatus =
+  | "idle"              // Haven't checked yet
+  | "checking"          // Currently reading chain
+  | "waiting_other"     // Other party hasn't filed
+  | "ready_verdict"     // Both filed, no verdict yet
+  | "resolved";         // Verdict exists
 
 type Role = "host" | "guest" | null;
 
@@ -43,10 +64,7 @@ function makeClient() {
   return { client: createClient({ chain: studionet, account }), account };
 }
 
-async function writeContract(
-  fn: string,
-  args: (string | number | boolean | bigint)[]
-): Promise<boolean> {
+async function writeContract(fn: string, args: (string | number | boolean | bigint)[]): Promise<boolean> {
   try {
     const { client } = makeClient();
     const hash = await client.writeContract({
@@ -56,16 +74,9 @@ async function writeContract(
       value: BigInt(0),
       leaderOnly: true,
     });
-    await client.waitForTransactionReceipt({
-      hash,
-      status: TransactionStatus.ACCEPTED,
-      retries: 60,
-      interval: 3000,
-    });
+    await client.waitForTransactionReceipt({ hash, status: TransactionStatus.ACCEPTED, retries: 60, interval: 3000 });
     return true;
-  } catch {
-    return false;
-  }
+  } catch { return false; }
 }
 
 async function readDispute(disputeId: number): Promise<DisputeState | null> {
@@ -79,9 +90,7 @@ async function readDispute(disputeId: number): Promise<DisputeState | null> {
     const raw = result as string;
     if (!raw) return null;
     return JSON.parse(raw) as DisputeState;
-  } catch {
-    return null;
-  }
+  } catch { return null; }
 }
 
 async function readDisputeCount(): Promise<number> {
@@ -93,9 +102,16 @@ async function readDisputeCount(): Promise<number> {
       args: [],
     });
     return Number(result);
-  } catch {
-    return 0;
-  }
+  } catch { return 0; }
+}
+
+// Determine dispute status from chain data
+function getDisputeStatus(state: DisputeState): DisputeStatus {
+  if (state.status === "resolved") return "resolved";
+  const hostFiled = !!(state.landlord_claim && state.landlord_claim.length > 0);
+  const guestFiled = !!(state.tenant_claim && state.tenant_claim.length > 0);
+  if (hostFiled && guestFiled) return "ready_verdict";
+  return "waiting_other";
 }
 
 function Logo({ size = 32 }: { size?: number }) {
@@ -121,11 +137,11 @@ export default function Home() {
   const [loadingMsg, setLoadingMsg] = useState("");
   const [disputeId, setDisputeId] = useState<number | null>(null);
   const [dispute, setDispute] = useState<DisputeState | null>(null);
+  const [disputeStatus, setDisputeStatus] = useState<DisputeStatus>("idle");
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
   const [verdictCopied, setVerdictCopied] = useState(false);
 
-  // Form fields
   const [propertyAddress, setPropertyAddress] = useState("");
   const [depositAmount, setDepositAmount] = useState("");
   const [currency, setCurrency] = useState("NGN");
@@ -137,91 +153,116 @@ export default function Home() {
   const [loadId, setLoadId] = useState("");
 
   const reset = useCallback(() => {
-    setScreen("home");
-    setMyRole(null);
-    setDisputeId(null);
-    setDispute(null);
-    setError("");
-    setCopied(false);
-    setVerdictCopied(false);
+    setScreen("home"); setMyRole(null); setDisputeId(null); setDispute(null);
+    setDisputeStatus("idle"); setError(""); setCopied(false); setVerdictCopied(false);
     setPropertyAddress(""); setDepositAmount(""); setCurrency("NGN");
     setHostName(""); setGuestName(""); setAgreementTerms("");
     setMyClaim(""); setMyEvidence(""); setLoadId("");
   }, []);
 
-  // Step 1: Create the dispute (works for both host and guest filer)
+  // ── CORE STATUS CHECK — used everywhere ──────────────────────────────────
+  // Reads the chain for a dispute ID and updates status state
+  // If resolved → navigates to verdict. Otherwise → navigates to status screen.
+  const checkStatus = useCallback(async (id: number, navigateToStatus = true) => {
+    setDisputeStatus("checking");
+    const state = await readDispute(id);
+    if (!state) {
+      setDisputeStatus("idle");
+      setError("Could not read dispute. Check the ID and try again.");
+      return;
+    }
+    setDispute(state);
+    const ds = getDisputeStatus(state);
+    setDisputeStatus(ds);
+    if (ds === "resolved") {
+      setScreen("verdict");
+    } else if (navigateToStatus) {
+      setScreen("status");
+    }
+  }, []);
+
+  // ── FLOW A: Create new dispute ────────────────────────────────────────────
   const handleCreateDispute = async () => {
     if (!propertyAddress || !depositAmount || !hostName || !guestName || !agreementTerms) {
       setError("Please fill in all fields"); return;
     }
     setError(""); setLoading(true); setLoadingMsg("Creating dispute on the blockchain...");
     const countBefore = await readDisputeCount();
-    const amountWithCurrency = `${depositAmount} ${currency}`;
-    const ok = await writeContract("create_dispute", [propertyAddress, amountWithCurrency, hostName, guestName, agreementTerms]);
+    const ok = await writeContract("create_dispute", [
+      propertyAddress, `${depositAmount} ${currency}`, hostName, guestName, agreementTerms
+    ]);
     if (!ok) { setError("Transaction failed. Please try again."); setLoading(false); return; }
     setDisputeId(countBefore + 1);
     setLoading(false);
-    setScreen("my_claim"); // Go straight to submitting their own claim
+    setScreen("my_claim");
   };
 
-  // Step 2: Filer submits their own claim
   const handleMyClaim = async () => {
     if (!myClaim || !myEvidence) { setError("Please fill in both fields"); return; }
     if (!disputeId) return;
-    setError(""); setLoading(true);
-    if (myRole === "host") {
-      setLoadingMsg("Submitting your claim onchain...");
-      const ok = await writeContract("submit_landlord_claim", [disputeId, myClaim, myEvidence]);
-      if (!ok) { setError("Transaction failed. Please try again."); setLoading(false); return; }
-    } else {
-      setLoadingMsg("Submitting your claim onchain...");
-      const ok = await writeContract("submit_tenant_claim", [disputeId, myClaim, myEvidence]);
-      if (!ok) { setError("Transaction failed. Please try again."); setLoading(false); return; }
-    }
+    setError(""); setLoading(true); setLoadingMsg("Sealing your claim onchain...");
+    const fn = myRole === "host" ? "submit_landlord_claim" : "submit_tenant_claim";
+    const ok = await writeContract(fn, [disputeId, myClaim, myEvidence]);
+    if (!ok) { setError("Transaction failed. Please try again."); setLoading(false); return; }
     setLoading(false);
-    setScreen("share_id"); // Show the ID to share with the other party
+    // After filing, go straight to status screen — auto-check
+    await checkStatus(disputeId);
   };
 
-  // Other party loads dispute by ID and submits their claim
-  const handleLoadForOtherClaim = async () => {
+  // ── FLOW B: Respond to existing dispute ───────────────────────────────────
+  const handleLoadToRespond = async () => {
+    if (!myRole) { setError("Please select your role first"); return; }
     const id = parseInt(loadId);
     if (isNaN(id) || id < 1) { setError("Please enter a valid dispute ID"); return; }
     setError(""); setLoading(true); setLoadingMsg("Loading dispute...");
     const state = await readDispute(id);
-    if (!state) { setError("Dispute not found. Check the ID and try again."); setLoading(false); return; }
-    setDisputeId(id); setDispute(state); setLoading(false);
-    if (state.status === "resolved") {
-      setScreen("verdict");
+    setLoading(false);
+    if (!state) { setError("Dispute not found. Check the ID and try again."); return; }
+    setDisputeId(id); setDispute(state);
+
+    if (state.status === "resolved") { setScreen("verdict"); return; }
+
+    // Has this party already submitted?
+    const myClaimFiled = myRole === "host"
+      ? !!(state.landlord_claim?.length)
+      : !!(state.tenant_claim?.length);
+
+    if (myClaimFiled) {
+      // Already filed — go to status to show current state
+      const ds = getDisputeStatus(state);
+      setDisputeStatus(ds);
+      setScreen("status");
     } else {
-      setScreen("other_claim");
+      setScreen("respond_claim");
     }
   };
 
-  // Other party submits their claim
-  const handleOtherClaim = async () => {
+  const handleRespondClaim = async () => {
     if (!myClaim || !myEvidence) { setError("Please fill in both fields"); return; }
     if (!disputeId) return;
-    setError(""); setLoading(true);
-    // Other party is the opposite of myRole
-    if (myRole === "host") {
-      // I'm the host who loaded, so I submit guest claim
-      setLoadingMsg("Submitting guest response onchain...");
-      const ok = await writeContract("submit_tenant_claim", [disputeId, myClaim, myEvidence]);
-      if (!ok) { setError("Transaction failed. Please try again."); setLoading(false); return; }
-    } else {
-      // I'm the guest who loaded, so I submit host claim
-      setLoadingMsg("Submitting host claim onchain...");
-      const ok = await writeContract("submit_landlord_claim", [disputeId, myClaim, myEvidence]);
-      if (!ok) { setError("Transaction failed. Please try again."); setLoading(false); return; }
-    }
+    setError(""); setLoading(true); setLoadingMsg("Sealing your response onchain...");
+    const fn = myRole === "host" ? "submit_landlord_claim" : "submit_tenant_claim";
+    const ok = await writeContract(fn, [disputeId, myClaim, myEvidence]);
+    if (!ok) { setError("Transaction failed. Please try again."); setLoading(false); return; }
     setLoading(false);
-    setScreen("pending");
+    await checkStatus(disputeId);
   };
 
+  // ── FLOW C: Come back later with just an ID ───────────────────────────────
+  const handleHomeLoad = async () => {
+    const id = parseInt(loadId);
+    if (isNaN(id) || id < 1) { setError("Please enter a valid dispute ID"); return; }
+    setError(""); setLoading(true); setLoadingMsg("Loading dispute...");
+    setDisputeId(id);
+    setLoading(false);
+    await checkStatus(id);
+  };
+
+  // ── REQUEST VERDICT ───────────────────────────────────────────────────────
   const handleRequestVerdict = async () => {
     if (!disputeId) return;
     setError(""); setLoading(true);
-    setLoadingMsg("5 AI validators are reading the evidence and reaching consensus... this takes 30–60 seconds");
+    setLoadingMsg("5 AI validators are reading both sides... this takes 30–60 seconds");
     const ok = await writeContract("request_verdict", [disputeId]);
     if (!ok) { setError("Transaction failed. Please try again."); setLoading(false); return; }
     setLoadingMsg("Reading verdict from chain...");
@@ -229,45 +270,31 @@ export default function Home() {
     setDispute(state); setLoading(false); setScreen("verdict");
   };
 
-  const handleLoadDispute = async () => {
-    const id = parseInt(loadId);
-    if (isNaN(id) || id < 1) { setError("Please enter a valid dispute ID"); return; }
-    setError(""); setLoading(true); setLoadingMsg("Loading dispute...");
-    const state = await readDispute(id);
-    if (!state) { setError("Dispute not found"); setLoading(false); return; }
-    setDisputeId(id); setDispute(state); setLoading(false);
-    setScreen(state.status === "resolved" ? "verdict" : "pending");
-  };
-
   const copyDisputeId = () => {
-    if (disputeId) {
-      navigator.clipboard.writeText(String(disputeId));
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    }
+    if (disputeId) { navigator.clipboard.writeText(String(disputeId)); setCopied(true); setTimeout(() => setCopied(false), 2000); }
   };
 
   const copyVerdictLink = () => {
-    navigator.clipboard.writeText(`Proof of Handshake — Dispute #${disputeId}\nVerdict: ${dispute?.winner === "tenant" ? "GUEST WINS" : "HOST WINS"}\nRuling: ${dispute?.verdict}\nView at: ${window.location.href}\nDispute ID: ${disputeId}`);
-    setVerdictCopied(true);
-    setTimeout(() => setVerdictCopied(false), 2500);
+    const txt = `Proof of Handshake — Dispute #${disputeId}\nVerdict: ${dispute?.winner === "tenant" ? "GUEST WINS" : "HOST WINS"}\nRuling: ${dispute?.verdict}\nDispute ID: ${disputeId}\nSite: ${typeof window !== "undefined" ? window.location.origin : ""}`;
+    navigator.clipboard.writeText(txt);
+    setVerdictCopied(true); setTimeout(() => setVerdictCopied(false), 2500);
   };
 
-  // Labels based on role
+  // Derived labels
   const myLabel = myRole === "host" ? "Host" : "Guest";
   const otherLabel = myRole === "host" ? "Guest" : "Host";
-  const myIcon = myRole === "host" ? "🏠" : "👤";
-  const otherIcon = myRole === "host" ? "👤" : "🏠";
   const myTagClass = myRole === "host" ? "poh-host-tag" : "poh-guest-tag";
+  const myIcon = myRole === "host" ? "🏠" : "👤";
+
+  // What to show on status screen based on disputeStatus
+  // If we don't know role (came back via home load), we show neutral labels
+  const knownRole = !!myRole;
 
   return (
     <main className="poh-main">
       <nav className="poh-nav">
         <div className="poh-nav-inner">
-          <div className="poh-logo" onClick={reset}>
-            <Logo size={28} />
-            <span className="poh-logo-name">Proof of Handshake</span>
-          </div>
+          <div className="poh-logo" onClick={reset}><Logo size={28} /><span className="poh-logo-name">Proof of Handshake</span></div>
           <div className="poh-nav-right">
             {screen !== "home" && <button className="poh-btn-ghost" onClick={reset}>← Home</button>}
             {screen === "home" && <button className="poh-btn-red" onClick={() => setScreen("role_select")}>File a Dispute →</button>}
@@ -292,15 +319,12 @@ export default function Home() {
           <div className="poh-home">
             <section className="poh-hero">
               <div className="poh-hero-left">
-                <div className="poh-stamp">
-                  <span className="poh-stamp-dot" />
-                  <span className="poh-stamp-text">Live · Bradbury Testnet</span>
-                </div>
+                <div className="poh-stamp"><span className="poh-stamp-dot" /><span className="poh-stamp-text">Live · Bradbury Testnet</span></div>
                 <h1 className="poh-h1">Your deposit.<br />Your rights.<br /><span className="poh-red">Proven onchain.</span></h1>
                 <p className="poh-hero-p">When your shortlet host refuses to return your caution fee, you deserve more than an argument. You deserve a verdict — transparent, reasoned, and stored permanently on the blockchain.</p>
                 <div className="poh-hero-btns">
                   <button className="poh-btn-red" onClick={() => setScreen("role_select")}>File a New Dispute →</button>
-                  <button className="poh-btn-outline" onClick={() => setScreen("pending")}>Load Existing Dispute</button>
+                  <button className="poh-btn-outline" onClick={() => setScreen("role_select")}>I Have a Dispute ID</button>
                 </div>
               </div>
               <div className="poh-hero-right">
@@ -309,18 +333,10 @@ export default function Home() {
                     <circle cx="130" cy="130" r="125" fill="none" stroke="#1e1e1e" strokeWidth="1" />
                     <path id="topArc" d="M 20,130 A 110,110 0 0,1 240,130" fill="none" />
                     <path id="botArc" d="M 240,130 A 110,110 0 0,1 20,130" fill="none" />
-                    <text fontFamily="monospace" fontSize="9" fill="#2a2a2a" letterSpacing="5">
-                      <textPath href="#topArc" startOffset="5%">PROOF · OF · HANDSHAKE · ONCHAIN ARBITRATION ·</textPath>
-                    </text>
-                    <text fontFamily="monospace" fontSize="9" fill="#2a2a2a" letterSpacing="5">
-                      <textPath href="#botArc" startOffset="5%">POWERED · BY · GENLAYER · AI CONSENSUS ·</textPath>
-                    </text>
+                    <text fontFamily="monospace" fontSize="9" fill="#2a2a2a" letterSpacing="5"><textPath href="#topArc" startOffset="5%">PROOF · OF · HANDSHAKE · ONCHAIN ARBITRATION ·</textPath></text>
+                    <text fontFamily="monospace" fontSize="9" fill="#2a2a2a" letterSpacing="5"><textPath href="#botArc" startOffset="5%">POWERED · BY · GENLAYER · AI CONSENSUS ·</textPath></text>
                   </svg>
-                  <div className="poh-seal-center">
-                    <Logo size={56} />
-                    <span className="poh-seal-label">Verdict sealed</span>
-                    <span className="poh-seal-status">● Resolved</span>
-                  </div>
+                  <div className="poh-seal-center"><Logo size={56} /><span className="poh-seal-label">Verdict sealed</span><span className="poh-seal-status">● Resolved</span></div>
                 </div>
               </div>
             </section>
@@ -338,10 +354,10 @@ export default function Home() {
               <div className="poh-section-label">The process</div>
               <div className="poh-flow-grid">
                 {[
-                  {n:"01",icon:"🎭",title:"Choose your role",desc:"Are you the Host or the Guest? Each party files independently from their own device"},
-                  {n:"02",icon:"📋",title:"File the dispute",desc:"Whoever starts first enters property details and their side of the story"},
-                  {n:"03",icon:"📲",title:"Share the ID",desc:"The dispute ID is shared with the other party — they respond from their own device"},
-                  {n:"04",icon:"⚖️",title:"AI consensus verdict",desc:"5 validators independently evaluate and reach a majority ruling onchain"},
+                  {n:"01",icon:"🎭",title:"Choose your role",desc:"Host or Guest — each party files from their own device, independently"},
+                  {n:"02",icon:"📋",title:"File & submit your side",desc:"Enter property details and your evidence. A dispute ID is generated."},
+                  {n:"03",icon:"📲",title:"Share the ID",desc:"Send the dispute ID to the other party via WhatsApp, SMS, or email"},
+                  {n:"04",icon:"⚖️",title:"AI consensus verdict",desc:"5 validators read both sides and reach a majority ruling onchain"},
                 ].map(s => (
                   <div key={s.n} className="poh-flow-step">
                     <div className="poh-flow-num">{s.n} —</div>
@@ -361,86 +377,84 @@ export default function Home() {
                   <span className="poh-win-badge">✓ GUEST WINS</span>
                 </div>
                 <div className="poh-verdict-body">
-                  <p className="poh-verdict-quote">&ldquo;The guest&apos;s move-in inspection report and messages prove the AC was faulty prior to check-in, negating the host&apos;s repair invoice. The guest provided photographic proof of the apartment&apos;s cleanliness upon departure, whereas the host failed to provide evidence of alleged damage.&rdquo;</p>
-                  <div className="poh-chips">
-                    {["GPT-5.1 ✓","Grok-4 ✓","Qwen3-235b ✓","Claude Sonnet ✓","Majority Agree ✓"].map(c=><span key={c} className="poh-chip-agree">{c}</span>)}
-                  </div>
+                  <p className="poh-verdict-quote">&ldquo;The guest&apos;s move-in inspection report and messages prove the AC was faulty prior to check-in, negating the host&apos;s repair invoice. The guest provided photographic proof of the apartment&apos;s cleanliness upon departure.&rdquo;</p>
+                  <div className="poh-chips">{["GPT-5.1 ✓","Grok-4 ✓","Qwen3-235b ✓","Claude Sonnet ✓","Majority Agree ✓"].map(c=><span key={c} className="poh-chip-agree">{c}</span>)}</div>
                 </div>
               </div>
             </div>
 
             <div className="poh-load-box">
-              <p className="poh-load-label">Already have a dispute ID? Load it here →</p>
+              <p className="poh-load-label">Have a dispute ID? Check status or load verdict →</p>
               <div className="poh-load-row">
-                <input className="poh-input" placeholder="Enter dispute ID e.g. 1" value={loadId} onChange={e=>setLoadId(e.target.value)} />
-                <button className="poh-btn-red" onClick={handleLoadDispute}>Load →</button>
+                <input className="poh-input" placeholder="Enter dispute ID e.g. 3" value={loadId} onChange={e=>{setLoadId(e.target.value); setError("");}} />
+                <button className="poh-btn-red" onClick={handleHomeLoad}>Check →</button>
               </div>
               {error && <p className="poh-error">{error}</p>}
             </div>
           </div>
         )}
 
-        {/* ── ROLE SELECT ── NEW SCREEN ── */}
+        {/* ── ROLE SELECT ── */}
         {screen === "role_select" && (
           <div className="poh-form-wrap">
             <div className="poh-form-hdr">
               <div className="poh-step-tag">Before we begin</div>
-              <h2 className="poh-form-title">Who are you in this dispute?</h2>
-              <p className="poh-form-sub">Each party files from their own device. Choose your role — the other party will respond separately using the dispute ID you share with them.</p>
+              <h2 className="poh-form-title">Who are you?</h2>
+              <p className="poh-form-sub">Select your role, then choose your path below.</p>
             </div>
+
             <div className="poh-role-grid">
-              <button
-                className="poh-role-card poh-role-host"
-                onClick={() => { setMyRole("host"); setScreen("create"); }}
-              >
+              <button className={`poh-role-card poh-role-host ${myRole === "host" ? "poh-role-active-host" : ""}`} onClick={() => { setMyRole("host"); setError(""); }}>
                 <span className="poh-role-icon">🏠</span>
                 <span className="poh-role-title">I am the Host</span>
-                <span className="poh-role-desc">I own or manage the property and I&apos;m disputing a refund claim</span>
+                <span className="poh-role-desc">I own or manage the property</span>
+                {myRole === "host" && <span className="poh-role-check">✓ Selected</span>}
               </button>
-              <button
-                className="poh-role-card poh-role-guest"
-                onClick={() => { setMyRole("guest"); setScreen("create"); }}
-              >
+              <button className={`poh-role-card poh-role-guest ${myRole === "guest" ? "poh-role-active-guest" : ""}`} onClick={() => { setMyRole("guest"); setError(""); }}>
                 <span className="poh-role-icon">👤</span>
                 <span className="poh-role-title">I am the Guest</span>
-                <span className="poh-role-desc">I stayed at the property and my caution fee was withheld unfairly</span>
+                <span className="poh-role-desc">I stayed at the property</span>
+                {myRole === "guest" && <span className="poh-role-check">✓ Selected</span>}
               </button>
             </div>
-            <div className="poh-role-or">
-              <span className="poh-role-or-line" />
-              <span className="poh-role-or-text">already have a dispute ID?</span>
-              <span className="poh-role-or-line" />
-            </div>
-            <div className="poh-load-box" style={{marginTop: 0}}>
-              <p className="poh-load-label">The other party already filed — enter their ID to respond</p>
-              <div className="poh-load-row">
-                <input className="poh-input" placeholder="Enter dispute ID e.g. 1" value={loadId} onChange={e=>setLoadId(e.target.value)} />
-                <button className="poh-btn-red" onClick={() => {
-                  if (!myRole) { setError("Please select your role above first"); return; }
-                  handleLoadForOtherClaim();
-                }}>Respond →</button>
+
+            {error && <p className="poh-error" style={{marginBottom:"1rem"}}>{error}</p>}
+
+            <div className="poh-two-paths">
+              <div className="poh-path-card">
+                <div className="poh-path-label">Starting the dispute</div>
+                <p className="poh-path-desc">The other party hasn&apos;t filed yet. You go first — a dispute ID will be created.</p>
+                <button className="poh-btn-red poh-btn-full" onClick={() => {
+                  if (!myRole) { setError("Please select your role first"); return; }
+                  setError(""); setScreen("create");
+                }}>Start New Dispute →</button>
               </div>
-              {error && <p className="poh-error">{error}</p>}
-              <p style={{fontSize:"0.75rem", color:"var(--muted)", marginTop:"0.5rem"}}>Make sure you&apos;ve selected your role above before loading</p>
+              <div className="poh-path-divider"><span>or</span></div>
+              <div className="poh-path-card">
+                <div className="poh-path-label">Responding to a dispute</div>
+                <p className="poh-path-desc">The other party already filed. Enter the ID they sent you.</p>
+                <div style={{marginBottom:"0.75rem"}}>
+                  <input className="poh-input" placeholder="Enter dispute ID e.g. 5" value={loadId} onChange={e=>{setLoadId(e.target.value); setError("");}} />
+                </div>
+                <button className="poh-btn-outline poh-btn-full" onClick={handleLoadToRespond}>Load &amp; Respond →</button>
+              </div>
             </div>
           </div>
         )}
 
-        {/* ── CREATE DISPUTE ── */}
+        {/* ── CREATE (Flow A Step 1) ── */}
         {screen === "create" && (
           <div className="poh-form-wrap">
             <div className="poh-form-hdr">
-              <div className="poh-step-tag">Step 1 of 3 · Filing as {myLabel}</div>
+              <div className="poh-step-tag">Step 1 of 2 · Filing as {myLabel}</div>
               <h2 className="poh-form-title">File the Dispute</h2>
-              <p className="poh-form-sub">Enter the property details and original agreement terms</p>
+              <p className="poh-form-sub">Enter the property and agreement details. Both parties will see this.</p>
             </div>
             <div className="poh-card">
               <div className="poh-field">
                 <label>Property Address</label>
                 <input className="poh-input" placeholder="e.g. 12 Adewale Street, Lekki, Lagos" value={propertyAddress} onChange={e=>setPropertyAddress(e.target.value)} />
               </div>
-
-              {/* Currency + Amount row */}
               <div className="poh-field">
                 <label>Caution Fee / Deposit Amount</label>
                 <div className="poh-amount-row">
@@ -450,16 +464,9 @@ export default function Home() {
                   <input className="poh-input poh-amount-input" placeholder="e.g. 150,000" value={depositAmount} onChange={e=>setDepositAmount(e.target.value)} />
                 </div>
               </div>
-
               <div className="poh-field-row">
-                <div className="poh-field">
-                  <label>Host Name</label>
-                  <input className="poh-input" placeholder="e.g. Mr Bello" value={hostName} onChange={e=>setHostName(e.target.value)} />
-                </div>
-                <div className="poh-field">
-                  <label>Guest Name</label>
-                  <input className="poh-input" placeholder="e.g. Miss Tunde" value={guestName} onChange={e=>setGuestName(e.target.value)} />
-                </div>
+                <div className="poh-field"><label>Host Name</label><input className="poh-input" placeholder="e.g. Mr Bello" value={hostName} onChange={e=>setHostName(e.target.value)} /></div>
+                <div className="poh-field"><label>Guest Name</label><input className="poh-input" placeholder="e.g. Miss Tunde" value={guestName} onChange={e=>setGuestName(e.target.value)} /></div>
               </div>
               <div className="poh-field">
                 <label>Original Agreement Terms</label>
@@ -471,155 +478,186 @@ export default function Home() {
           </div>
         )}
 
-        {/* ── MY CLAIM (filer submits their side right away) ── */}
+        {/* ── MY CLAIM (Flow A Step 2) ── */}
         {screen === "my_claim" && (
           <div className="poh-form-wrap">
             <div className="poh-form-hdr">
-              <div className="poh-step-tag">Step 2 of 3 · Your Side</div>
+              <div className="poh-step-tag">Step 2 of 2 · Your Evidence</div>
               <h2 className="poh-form-title">{myLabel}&apos;s Claim</h2>
-              <p className="poh-form-sub">Dispute ID: <strong className="poh-id-badge">#{disputeId}</strong> — Submit your side now</p>
+              <p className="poh-form-sub">Dispute <strong className="poh-id-badge">#{disputeId}</strong> is live. Submit your side now.</p>
             </div>
             <div className="poh-card">
               <div className={`poh-party-tag ${myTagClass}`}>{myIcon} {myLabel}&apos;s Side</div>
               <div className="poh-field">
                 <label>Your Claim</label>
-                <textarea
-                  className="poh-textarea"
+                <textarea className="poh-textarea"
                   placeholder={myRole === "host"
-                    ? "Describe why you are withholding the caution fee. Be specific about what damage occurred."
-                    : "Describe why the caution fee should be refunded. Be specific about your stay and check-out condition."}
-                  value={myClaim} onChange={e=>setMyClaim(e.target.value)} rows={4}
-                />
+                    ? "Describe why you are withholding the caution fee. Be specific about what damage or rule violation occurred."
+                    : "Describe why the caution fee should be refunded. Explain your stay and checkout condition."}
+                  value={myClaim} onChange={e=>setMyClaim(e.target.value)} rows={4} />
               </div>
               <div className="poh-field">
                 <label>Your Evidence</label>
-                <textarea
-                  className="poh-textarea"
+                <textarea className="poh-textarea"
                   placeholder={myRole === "host"
-                    ? "List your evidence — checkout photos, repair invoices, inspection reports, messages, etc."
+                    ? "List your evidence — damage photos, repair invoices, inspection reports, WhatsApp messages, etc."
                     : "List your evidence — check-in photos, messages from host, receipts, WhatsApp screenshots, etc."}
-                  value={myEvidence} onChange={e=>setMyEvidence(e.target.value)} rows={4}
-                />
+                  value={myEvidence} onChange={e=>setMyEvidence(e.target.value)} rows={4} />
               </div>
               {error && <p className="poh-error">{error}</p>}
-              <button className="poh-btn-red poh-btn-full" onClick={handleMyClaim}>Submit My Claim →</button>
+              <button className="poh-btn-red poh-btn-full" onClick={handleMyClaim}>Seal My Claim →</button>
             </div>
           </div>
         )}
 
-        {/* ── SHARE ID ── NEW SCREEN ── */}
-        {screen === "share_id" && (
+        {/* ── RESPOND CLAIM (Flow B) ── */}
+        {screen === "respond_claim" && dispute && (
           <div className="poh-form-wrap">
             <div className="poh-form-hdr">
-              <div className="poh-step-tag">Step 3 of 3 · Share with {otherLabel}</div>
-              <h2 className="poh-form-title">Your claim is sealed ✓</h2>
-              <p className="poh-form-sub">Now the {otherLabel} needs to respond from their own device.</p>
+              <div className="poh-step-tag">Responding to Dispute #{disputeId} · As {myLabel}</div>
+              <h2 className="poh-form-title">Submit Your Side</h2>
+              <p className="poh-form-sub">Review the dispute details below, then tell your side of the story.</p>
             </div>
             <div className="poh-card">
-              <div className="poh-share-id-block">
-                <p className="poh-share-label">Share this Dispute ID with the {otherLabel}:</p>
-                <div className="poh-share-id-row">
-                  <div className="poh-share-id-num">#{disputeId}</div>
-                  <button className="poh-btn-outline" onClick={copyDisputeId}>
-                    {copied ? "✓ Copied!" : "Copy ID"}
-                  </button>
+              <div className="poh-dispute-context">
+                <div className="poh-context-label">Dispute Details</div>
+                <div className="poh-details-grid">
+                  <span className="poh-dl">Property</span><span className="poh-dv">{dispute.property_address}</span>
+                  <span className="poh-dl">Amount</span><span className="poh-dv">{dispute.deposit_amount}</span>
+                  <span className="poh-dl">Host</span><span className="poh-dv">{dispute.landlord_name}</span>
+                  <span className="poh-dl">Guest</span><span className="poh-dv">{dispute.tenant_name}</span>
+                </div>
+                <div style={{marginTop:"1rem", borderTop:"1px solid var(--ink4)", paddingTop:"1rem"}}>
+                  <div className="poh-dl" style={{marginBottom:"0.4rem"}}>Original Agreement Terms</div>
+                  <p style={{fontSize:"0.83rem", color:"var(--muted2)", lineHeight:"1.65"}}>{dispute.agreement_terms}</p>
                 </div>
               </div>
-
-              <div className="poh-instructions-block">
-                <p className="poh-instructions-label">Tell the {otherLabel} to:</p>
-                <ol className="poh-instructions-list">
-                  <li>Go to this website</li>
-                  <li>Click &ldquo;File a Dispute&rdquo; → choose <strong>&ldquo;I am the {otherLabel}&rdquo;</strong></li>
-                  <li>Enter dispute ID <strong className="poh-id-badge">#{disputeId}</strong></li>
-                  <li>Submit their side of the story</li>
-                </ol>
-              </div>
-
-              <div className="poh-share-note">
-                <span className="poh-share-note-icon">💬</span>
-                <span>Send via WhatsApp, SMS, email — whatever works. They only need the ID number.</span>
-              </div>
-
-              <div style={{borderTop:"1px solid var(--ink4)", paddingTop:"1.25rem"}}>
-                <p style={{fontSize:"0.82rem", color:"var(--muted2)", marginBottom:"0.75rem"}}>Once the {otherLabel} has responded, come back here to request the AI verdict:</p>
-                <button className="poh-btn-red poh-btn-full" onClick={() => setScreen("pending")}>
-                  {otherIcon} I&apos;m the {otherLabel} — I&apos;ve responded, request verdict →
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* ── OTHER PARTY CLAIM ── */}
-        {screen === "other_claim" && dispute && (
-          <div className="poh-form-wrap">
-            <div className="poh-form-hdr">
-              <div className="poh-step-tag">Responding to Dispute #{disputeId}</div>
-              <h2 className="poh-form-title">{myLabel}&apos;s Response</h2>
-              <p className="poh-form-sub">
-                Dispute between <strong>{dispute.landlord_name}</strong> (Host) and <strong>{dispute.tenant_name}</strong> (Guest) · {dispute.deposit_amount}
-              </p>
-            </div>
-            <div className="poh-card">
-              <div className={`poh-party-tag ${myTagClass}`}>{myIcon} {myLabel}&apos;s Side</div>
-              <div className="poh-info-strip">
-                <span className="poh-info-label">Property</span>
-                <span className="poh-info-val">{dispute.property_address}</span>
-              </div>
+              <div className={`poh-party-tag ${myTagClass}`}>{myIcon} Your Response ({myLabel})</div>
               <div className="poh-field">
                 <label>Your Claim</label>
-                <textarea
-                  className="poh-textarea"
+                <textarea className="poh-textarea"
                   placeholder={myRole === "guest"
-                    ? "Describe why the caution fee should be refunded. Be specific about your stay."
-                    : "Describe why you are withholding the caution fee. Be specific about what damage occurred."}
-                  value={myClaim} onChange={e=>setMyClaim(e.target.value)} rows={4}
-                />
+                    ? "Describe why the caution fee should be refunded. Be specific about your stay and checkout condition."
+                    : "Describe why you are withholding the caution fee. Be specific about damage or rule violations."}
+                  value={myClaim} onChange={e=>setMyClaim(e.target.value)} rows={4} />
               </div>
               <div className="poh-field">
                 <label>Your Evidence</label>
-                <textarea
-                  className="poh-textarea"
+                <textarea className="poh-textarea"
                   placeholder={myRole === "guest"
-                    ? "List your evidence — check-in photos, messages, receipts, WhatsApp screenshots, etc."
+                    ? "List your evidence — check-in photos, messages from host, receipts, WhatsApp screenshots, etc."
                     : "List your evidence — damage photos, repair invoices, inspection reports, messages, etc."}
-                  value={myEvidence} onChange={e=>setMyEvidence(e.target.value)} rows={4}
-                />
+                  value={myEvidence} onChange={e=>setMyEvidence(e.target.value)} rows={4} />
               </div>
               {error && <p className="poh-error">{error}</p>}
-              <button className="poh-btn-red poh-btn-full" onClick={handleOtherClaim}>Submit My Response →</button>
+              <button className="poh-btn-red poh-btn-full" onClick={handleRespondClaim}>Submit My Response →</button>
             </div>
           </div>
         )}
 
-        {/* ── PENDING / REQUEST VERDICT ── */}
-        {screen === "pending" && (
+        {/* ── STATUS SCREEN — the smart hub ── */}
+        {screen === "status" && (
           <div className="poh-form-wrap">
-            <div className="poh-form-hdr">
-              <div className="poh-step-tag">Final Step · Request Verdict</div>
-              <h2 className="poh-form-title">Summon the Judges</h2>
-              <p className="poh-form-sub">Both claims are on-chain. Ready to call the AI panel.</p>
-            </div>
-            <div className="poh-card">
-              <div className="poh-validators-block">
-                <p className="poh-validators-label">5 AI validators will evaluate this dispute independently:</p>
-                <div className="poh-chips">
-                  {["GPT-5.1","Grok-4","Qwen3-235b","Claude Sonnet","+ more"].map(c=><span key={c} className="poh-chip">{c}</span>)}
+
+            {/* WAITING: other party hasn't filed yet */}
+            {disputeStatus === "waiting_other" && (
+              <>
+                <div className="poh-form-hdr">
+                  <div className="poh-step-tag">Dispute #{disputeId} · Waiting</div>
+                  <h2 className="poh-form-title">Your claim is sealed ✓</h2>
+                  <p className="poh-form-sub">
+                    {knownRole
+                      ? `The ${otherLabel} hasn't responded yet. Share the ID below.`
+                      : "The other party hasn't responded yet."}
+                  </p>
                 </div>
-                <p className="poh-pending-note">Each validator reads both sides and issues a verdict. The majority ruling is sealed permanently onchain.</p>
-              </div>
-              {disputeId && <p className="poh-dispute-id-display">Dispute ID: <strong className="poh-id-badge">#{disputeId}</strong></p>}
-              {!disputeId && (
-                <div className="poh-field">
-                  <label>Enter Dispute ID</label>
-                  <input className="poh-input" placeholder="e.g. 1" value={loadId} onChange={e=>setLoadId(e.target.value)} />
-                  <button className="poh-btn-outline" style={{marginTop:"8px"}} onClick={()=>{const id=parseInt(loadId);if(!isNaN(id))setDisputeId(id);}}>Set ID</button>
+                <div className="poh-card">
+                  {/* ID share block */}
+                  <div className="poh-share-id-block">
+                    <p className="poh-share-label">Dispute ID{knownRole ? ` — share with the ${otherLabel}` : ""}:</p>
+                    <div className="poh-share-id-row">
+                      <div className="poh-share-id-num">#{disputeId}</div>
+                      <button className="poh-btn-outline" onClick={copyDisputeId}>{copied ? "✓ Copied!" : "Copy ID"}</button>
+                    </div>
+                  </div>
+
+                  {knownRole && (
+                    <div className="poh-instructions-block">
+                      <p className="poh-instructions-label">Tell the {otherLabel} to:</p>
+                      <ol className="poh-instructions-list">
+                        <li>Go to this website</li>
+                        <li>Click &ldquo;File a Dispute&rdquo; → select <strong>&ldquo;I am the {otherLabel}&rdquo;</strong></li>
+                        <li>Enter ID <strong className="poh-id-badge">#{disputeId}</strong> and click &ldquo;Load &amp; Respond&rdquo;</li>
+                        <li>Submit their side of the story</li>
+                      </ol>
+                    </div>
+                  )}
+
+                  <div className="poh-share-note">
+                    <span className="poh-share-note-icon">💬</span>
+                    <span>Send via WhatsApp, SMS, or email. They only need the ID number.</span>
+                  </div>
+
+                  <div className="poh-status-check-block">
+                    <p className="poh-status-check-label">Once they&apos;ve responded, press this to check:</p>
+                    <button
+                      className="poh-btn-red poh-btn-full"
+                      disabled={disputeStatus === "checking"}
+                      onClick={async () => { if (disputeId) await checkStatus(disputeId); }}
+                    >
+                      {disputeStatus === "checking" ? "Checking..." : `Check if ${knownRole ? otherLabel : "Other Party"} Has Responded →`}
+                    </button>
+                  </div>
+                  {error && <p className="poh-error">{error}</p>}
                 </div>
-              )}
-              {error && <p className="poh-error">{error}</p>}
-              <button className="poh-btn-red poh-btn-full poh-btn-gavel" onClick={handleRequestVerdict} disabled={!disputeId}>⚖️ Request AI Verdict</button>
-            </div>
+              </>
+            )}
+
+            {/* READY: both filed, verdict not yet requested */}
+            {disputeStatus === "ready_verdict" && (
+              <>
+                <div className="poh-form-hdr">
+                  <div className="poh-step-tag">Dispute #{disputeId} · Both Sides Filed</div>
+                  <h2 className="poh-form-title">Ready for Verdict ⚖️</h2>
+                  <p className="poh-form-sub">Both claims are sealed onchain. Either party can now summon the judges.</p>
+                </div>
+                <div className="poh-card">
+                  <div className="poh-ready-banner">
+                    <span className="poh-ready-icon">✅</span>
+                    <div>
+                      <div className="poh-ready-title">Both sides have filed their claims</div>
+                      <div className="poh-ready-sub">The AI judges are standing by. This takes 30–60 seconds once requested.</div>
+                    </div>
+                  </div>
+                  <div className="poh-validators-block">
+                    <p className="poh-validators-label">5 AI validators will evaluate independently:</p>
+                    <div className="poh-chips">
+                      {["GPT-5.1","Grok-4","Qwen3-235b","Claude Sonnet","+ more"].map(c=><span key={c} className="poh-chip">{c}</span>)}
+                    </div>
+                    <p className="poh-pending-note">Each validator reads both sides and issues a verdict. Majority ruling is sealed permanently onchain.</p>
+                  </div>
+                  {error && <p className="poh-error">{error}</p>}
+                  <button className="poh-btn-red poh-btn-full poh-btn-gavel" onClick={handleRequestVerdict}>⚖️ Request AI Verdict</button>
+                </div>
+              </>
+            )}
+
+            {/* CHECKING state — spinner while reading chain */}
+            {disputeStatus === "checking" && (
+              <>
+                <div className="poh-form-hdr">
+                  <div className="poh-step-tag">Dispute #{disputeId}</div>
+                  <h2 className="poh-form-title">Checking status...</h2>
+                </div>
+                <div className="poh-card">
+                  <div className="poh-waiting-block">
+                    <div className="poh-seal-spin" style={{display:"inline-block"}}><Logo size={48} /></div>
+                    <p className="poh-waiting-text">Reading the blockchain...</p>
+                  </div>
+                </div>
+              </>
+            )}
+
           </div>
         )}
 
@@ -657,18 +695,12 @@ export default function Home() {
                 </div>
                 <div className="poh-contract-ref">Contract: <span className="poh-mono">{CONTRACT_ADDRESS.slice(0,10)}...{CONTRACT_ADDRESS.slice(-6)}</span></div>
               </div>
-
-              {/* Share verdict */}
               <div className="poh-vcard poh-share-verdict-card">
                 <h3>📤 Share This Verdict</h3>
-                <p style={{fontSize:"0.82rem", color:"var(--muted2)", marginBottom:"1rem"}}>Both parties can view the result using Dispute ID <strong className="poh-id-badge">#{dispute.dispute_id}</strong> — share it as evidence or for your records.</p>
+                <p style={{fontSize:"0.82rem", color:"var(--muted2)", marginBottom:"1rem"}}>Both parties can view this result using Dispute ID <strong className="poh-id-badge">#{dispute.dispute_id}</strong>.</p>
                 <div style={{display:"flex", gap:"0.75rem", flexWrap:"wrap"}}>
-                  <button className="poh-btn-outline" onClick={copyVerdictLink}>
-                    {verdictCopied ? "✓ Copied to clipboard!" : "📋 Copy verdict summary"}
-                  </button>
-                  <button className="poh-btn-ghost" onClick={() => window.print()}>
-                    🖨️ Print / Save as PDF
-                  </button>
+                  <button className="poh-btn-outline" onClick={copyVerdictLink}>{verdictCopied ? "✓ Copied!" : "📋 Copy verdict summary"}</button>
+                  <button className="poh-btn-ghost" onClick={() => window.print()}>🖨️ Print / Save as PDF</button>
                 </div>
               </div>
             </div>
