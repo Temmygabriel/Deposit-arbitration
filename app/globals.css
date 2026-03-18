@@ -267,3 +267,38 @@ html, body { background: var(--ink); color: var(--text); font-family: var(--font
   .poh-role-grid { grid-template-columns: 1fr; }
   .poh-share-id-row { flex-direction: column; align-items: flex-start; gap: 0.75rem; }
 }
+
+/* ── TWO PATHS ── */
+.poh-two-paths { display: flex; flex-direction: column; gap: 0; border: 1px solid var(--ink4); border-radius: 14px; overflow: hidden; }
+.poh-path-card { padding: 1.5rem; background: var(--ink2); display: flex; flex-direction: column; gap: 0.75rem; }
+.poh-path-card:first-child { border-bottom: 1px solid var(--ink4); }
+.poh-path-divider { display: none; }
+.poh-path-label { font-family: var(--font-mono); font-size: 0.65rem; color: var(--gold); text-transform: uppercase; letter-spacing: 0.1em; }
+.poh-path-desc { font-size: 0.82rem; color: var(--muted); line-height: 1.55; }
+
+/* ── ROLE ACTIVE STATES ── */
+.poh-role-active-host { border-color: var(--gold) !important; background: rgba(201,168,76,0.06) !important; }
+.poh-role-active-guest { border-color: var(--green) !important; background: rgba(34,197,94,0.06) !important; }
+.poh-role-check { font-family: var(--font-mono); font-size: 0.68rem; color: var(--green); margin-top: 0.25rem; }
+
+/* ── WAITING BLOCK ── */
+.poh-waiting-block { text-align: center; padding: 1.5rem 1rem; display: flex; flex-direction: column; align-items: center; gap: 0.75rem; }
+.poh-waiting-icon { font-size: 2.5rem; }
+.poh-waiting-text { font-size: 0.85rem; color: var(--muted2); line-height: 1.7; max-width: 360px; }
+
+/* ── DISPUTE CONTEXT (shown to responding party) ── */
+.poh-dispute-context { background: var(--ink3); border: 1px solid var(--ink5); border-radius: 10px; padding: 1.25rem; }
+.poh-context-label { font-family: var(--font-mono); font-size: 0.65rem; color: var(--red); text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 0.75rem; }
+
+@media (max-width: 600px) {
+  .poh-path-divider { display: block; }
+}
+
+/* ── STATUS SCREEN ── */
+.poh-status-check-block { border-top: 1px solid var(--ink4); padding-top: 1.25rem; display: flex; flex-direction: column; gap: 0.6rem; }
+.poh-status-check-label { font-size: 0.82rem; color: var(--muted2); }
+
+.poh-ready-banner { display: flex; align-items: flex-start; gap: 1rem; background: rgba(34,197,94,0.06); border: 1px solid rgba(34,197,94,0.18); border-radius: 10px; padding: 1rem 1.25rem; }
+.poh-ready-icon { font-size: 1.4rem; flex-shrink: 0; margin-top: 2px; }
+.poh-ready-title { font-family: var(--font-head); font-weight: 700; font-size: 0.9rem; color: var(--green); margin-bottom: 0.3rem; }
+.poh-ready-sub { font-size: 0.78rem; color: var(--muted); line-height: 1.55; }
