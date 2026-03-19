@@ -57,7 +57,7 @@ interface DisputeState {
   winner: string;
 }
 
-const FUNDED_ACCOUNT = createAccount(process.env.NEXT_PUBLIC_FUNDED_KEY!);
+const FUNDED_ACCOUNT = createAccount(process.env.NEXT_PUBLIC_FUNDED_KEY as `0x${string}`);
 
 function makeClient() {
   const client = createClient({
