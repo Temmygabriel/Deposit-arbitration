@@ -57,30 +57,28 @@ interface DisputeState {
   winner: string;
 }
 
-const bradbury = {
-  ...testnetAsimov,
-  id: 4221,
-  rpcUrls: {
-    default: { http: ["https://zksync-os-testnet-genlayer.zksync.dev"] },
-    public: { http: ["https://zksync-os-testnet-genlayer.zksync.dev"] },
-  },
-};
-
-const FUNDED_ACCOUNT = createAccount("0x352ad7479c57771f2bb7a1efdad1b24a57e8420e2ea4dc9ed8cf7cf465b3b8e5");
+const BRADBURY_RPC = "https://zksync-os-testnet-genlayer.zksync.dev";
+const FUNDED_ADDRESS = "0xa881365a99d77be904e414ae610e22938bb0466d";
 
 function makeClient() {
-  return { client: createClient({ chain: bradbury, account: FUNDED_ACCOUNT }), account: FUNDED_ACCOUNT };
+  const account = createAccount("0x352ad7479c57771f2bb7a1efdad1b24a57e8420e2ea4dc9ed8cf7cf465b3b8e5");
+  const client = createClient({
+    chain: testnetAsimov,
+    account: FUNDED_ADDRESS as `0x${string}`,
+    endpoint: BRADBURY_RPC,
+  } as any);
+  return { client, account };
 }
 
 async function writeContract(fn: string, args: (string | number | boolean | bigint)[]): Promise<boolean> {
   try {
-    const { client } = makeClient();
-    const hash = await client.writeContract({
-      account: FUNDED_ACCOUNT,
+    const { client, account } = makeClient();
+    const hash = await (client as any).writeContract({
       address: CONTRACT_ADDRESS as `0x${string}`,
       functionName: fn,
       args,
       value: BigInt(0),
+      account,
     });
     await client.waitForTransactionReceipt({ hash, status: TransactionStatus.ACCEPTED, retries: 60, interval: 3000 });
     return true;
