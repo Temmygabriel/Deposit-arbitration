@@ -1,10 +1,10 @@
 "use client";
 import { useState, useCallback } from "react";
 import { createClient, createAccount } from "genlayer-js";
-import { testnetBradbury } from "genlayer-js/chains";
+import { testnetAsimov } from "genlayer-js/chains";
 import { TransactionStatus } from "genlayer-js/types";
 
-const CONTRACT_ADDRESS = "0x4E7036b09a02d9118A07E566be547AF68464Db10";
+const CONTRACT_ADDRESS = "0x25f192AC05f481A83bc440652D057279eD1Eb4D9";
 
 /**
  * FLOW A — Starting a new dispute
@@ -57,15 +57,14 @@ interface DisputeState {
   winner: string;
 }
 
-const FUNDED_ACCOUNT = createAccount("0x352ad7479c57771f2bb7a1efdad1b24a57e8420e2ea4dc9ed8cf7cf465b3b8e5");
-
 function makeClient() {
+  const account = createAccount();
   const client = createClient({
-    chain: testnetBradbury,
-    account: FUNDED_ACCOUNT,
+    chain: testnetAsimov,
+    account,
     endpoint: "https://zksync-os-testnet-genlayer.zksync.dev",
   } as any);
-  return { client, account: FUNDED_ACCOUNT };
+  return { client, account };
 }
 
 async function writeContract(fn: string, args: (string | number | boolean | bigint)[]): Promise<boolean> {
