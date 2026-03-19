@@ -138,6 +138,7 @@ export default function Home() {
   const [dispute, setDispute] = useState<DisputeState | null>(null);
   const [disputeStatus, setDisputeStatus] = useState<DisputeStatus>("idle");
   const [statusChecking, setStatusChecking] = useState(false);
+  const [checkResult, setCheckResult] = useState<"not_yet" | "ready" | null>(null);
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
   const [verdictCopied, setVerdictCopied] = useState(false);
@@ -154,7 +155,7 @@ export default function Home() {
 
   const reset = useCallback(() => {
     setScreen("home"); setMyRole(null); setDisputeId(null); setDispute(null);
-    setDisputeStatus("idle"); setStatusChecking(false); setError(""); setCopied(false); setVerdictCopied(false);
+    setDisputeStatus("idle"); setStatusChecking(false); setCheckResult(null); setError(""); setCopied(false); setVerdictCopied(false);
     setPropertyAddress(""); setDepositAmount(""); setCurrency("NGN");
     setHostName(""); setGuestName(""); setAgreementTerms("");
     setMyClaim(""); setMyEvidence(""); setLoadId("");
@@ -178,8 +179,12 @@ export default function Home() {
     setStatusChecking(false);
     if (ds === "resolved") {
       setScreen("verdict");
-    } else if (navigateToStatus) {
-      setScreen("status");
+    } else if (ds === "ready_verdict") {
+      setCheckResult("ready");
+      if (navigateToStatus) setScreen("status");
+    } else {
+      setCheckResult("not_yet");
+      if (navigateToStatus) setScreen("status");
     }
   }, []);
 
@@ -605,10 +610,22 @@ export default function Home() {
                     <button
                       className="poh-btn-red poh-btn-full"
                       disabled={statusChecking}
-                      onClick={async () => { if (disputeId) await checkStatus(disputeId); }}
+                      onClick={async () => { setCheckResult(null); if (disputeId) await checkStatus(disputeId); }}
                     >
-                      {statusChecking ? "Checking..." : `Check if ${knownRole ? otherLabel : "Other Party"} Has Responded →`}
+                      {statusChecking ? "⏳ Checking the blockchain..." : `Check if ${knownRole ? otherLabel : "Other Party"} Has Responded →`}
                     </button>
+                    {checkResult === "not_yet" && (
+                      <div className="poh-check-result poh-check-waiting">
+                        <span>⏳</span>
+                        <span>{knownRole ? otherLabel : "Other party"} has <strong>not responded yet.</strong> Send them the ID and ask them to file their side.</span>
+                      </div>
+                    )}
+                    {checkResult === "ready" && (
+                      <div className="poh-check-result poh-check-ready">
+                        <span>✅</span>
+                        <span>Both sides are in! Scroll down to request the verdict.</span>
+                      </div>
+                    )}
                   </div>
                   {error && <p className="poh-error">{error}</p>}
                 </div>
@@ -698,7 +715,7 @@ export default function Home() {
 
       <footer className="poh-footer">
         <div className="poh-footer-logo"><Logo size={18} /><span className="poh-footer-name">Proof of Handshake</span></div>
-        <p className="poh-footer-right">Built on GenLayer · Onchain Justice Track · Bradbury Builders Hackathon 2025</p>
+        <p className="poh-footer-right">Built on GenLayer · Onchain Justice Track · Bradbury Builders Hackathon 2026</p>
       </footer>
     </main>
   );
