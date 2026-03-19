@@ -1,7 +1,7 @@
 "use client";
 import { useState, useCallback } from "react";
 import { createClient, createAccount } from "genlayer-js";
-import { testnetAsimov } from "genlayer-js/chains";
+import { testnetBradbury } from "genlayer-js/chains";
 import { TransactionStatus } from "genlayer-js/types";
 
 const CONTRACT_ADDRESS = "0x73e7947D5fb2eC93d0C690D70e7Ec8521DD835E4";
@@ -57,17 +57,16 @@ interface DisputeState {
   winner: string;
 }
 
-const BRADBURY_RPC = "https://zksync-os-testnet-genlayer.zksync.dev";
 const FUNDED_ADDRESS = "0xa881365a99d77be904e414ae610e22938bb0466d";
+const FUNDED_ACCOUNT = createAccount("0x352ad7479c57771f2bb7a1efdad1b24a57e8420e2ea4dc9ed8cf7cf465b3b8e5");
 
 function makeClient() {
-  const account = createAccount("0x352ad7479c57771f2bb7a1efdad1b24a57e8420e2ea4dc9ed8cf7cf465b3b8e5");
   const client = createClient({
-    chain: testnetAsimov,
+    chain: testnetBradbury,
     account: FUNDED_ADDRESS as `0x${string}`,
-    endpoint: BRADBURY_RPC,
+    endpoint: "https://zksync-os-testnet-genlayer.zksync.dev",
   } as any);
-  return { client, account };
+  return { client, account: FUNDED_ACCOUNT };
 }
 
 async function writeContract(fn: string, args: (string | number | boolean | bigint)[]): Promise<boolean> {
@@ -690,7 +689,7 @@ export default function Home() {
 
       <footer className="poh-footer">
         <div className="poh-footer-logo"><Logo size={18} /><span className="poh-footer-name">Proof of Handshake</span></div>
-        <p className="poh-footer-right">Built on GenLayer · Onchain Justice Track · Bradbury Builders Hackathon 2025</p>
+        <p className="poh-footer-right">Built on GenLayer · Onchain Justice Track · Bradbury Builders Hackathon 2026</p>
       </footer>
     </main>
   );
