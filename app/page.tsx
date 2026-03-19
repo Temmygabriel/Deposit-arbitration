@@ -66,15 +66,17 @@ const bradbury = {
   },
 };
 
+const FUNDED_ACCOUNT = createAccount("0x352ad7479c57771f2bb7a1efdad1b24a57e8420e2ea4dc9ed8cf7cf465b3b8e5");
+
 function makeClient() {
-  const account = createAccount("0x352ad7479c57771f2bb7a1efdad1b24a57e8420e2ea4dc9ed8cf7cf465b3b8e5");
-  return { client: createClient({ chain: bradbury, account }), account };
+  return { client: createClient({ chain: bradbury, account: FUNDED_ACCOUNT }), account: FUNDED_ACCOUNT };
 }
 
 async function writeContract(fn: string, args: (string | number | boolean | bigint)[]): Promise<boolean> {
   try {
     const { client } = makeClient();
     const hash = await client.writeContract({
+      account: FUNDED_ACCOUNT,
       address: CONTRACT_ADDRESS as `0x${string}`,
       functionName: fn,
       args,
