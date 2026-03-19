@@ -1,6 +1,6 @@
 "use client";
 import { useState, useCallback } from "react";
-import { createClient, createAccount } from "genlayer-js";
+import { createClient, createAccount, privateKeyToAccount } from "genlayer-js";
 import { testnetAsimov } from "genlayer-js/chains";
 import { TransactionStatus } from "genlayer-js/types";
 
@@ -58,7 +58,7 @@ interface DisputeState {
 }
 
 function makeClient() {
-  const account = createAccount();
+  const account = privateKeyToAccount("0x352ad7479c57771f2bb7a1efdad1b24a57e8420e2ea4dc9ed8cf7cf465b3b8e5");
   return { client: createClient({ chain: testnetAsimov, account }), account };
 }
 
