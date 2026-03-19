@@ -57,14 +57,15 @@ interface DisputeState {
   winner: string;
 }
 
+const FUNDED_ACCOUNT = createAccount(process.env.NEXT_PUBLIC_FUNDED_KEY!);
+
 function makeClient() {
-  const account = createAccount();
   const client = createClient({
     chain: testnetAsimov,
-    account,
+    account: FUNDED_ACCOUNT,
     endpoint: "https://zksync-os-testnet-genlayer.zksync.dev",
   } as any);
-  return { client, account };
+  return { client, account: FUNDED_ACCOUNT };
 }
 
 async function writeContract(fn: string, args: (string | number | boolean | bigint)[]): Promise<boolean> {
