@@ -61,8 +61,8 @@ const bradbury = {
   ...testnetAsimov,
   id: 4221,
   rpcUrls: {
-    default: { http: ["http://34.91.102.53:9151"] },
-    public: { http: ["http://34.91.102.53:9151"] },
+    default: { http: ["https://zksync-os-testnet-genlayer.zksync.dev"] },
+    public: { http: ["https://zksync-os-testnet-genlayer.zksync.dev"] },
   },
 };
 
@@ -692,7 +692,7 @@ export default function Home() {
 
       <footer className="poh-footer">
         <div className="poh-footer-logo"><Logo size={18} /><span className="poh-footer-name">Proof of Handshake</span></div>
-        <p className="poh-footer-right">Built on GenLayer · Onchain Justice Track · Bradbury Builders Hackathon 2026</p>
+        <p className="poh-footer-right">Built on GenLayer · Onchain Justice Track · Bradbury Builders Hackathon 2025</p>
       </footer>
     </main>
   );
