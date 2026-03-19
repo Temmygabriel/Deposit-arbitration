@@ -70,7 +70,6 @@ async function writeContract(fn: string, args: (string | number | boolean | bigi
       functionName: fn,
       args,
       value: BigInt(0),
-      leaderOnly: true,
     });
     await client.waitForTransactionReceipt({ hash, status: TransactionStatus.ACCEPTED, retries: 60, interval: 3000 });
     return true;
