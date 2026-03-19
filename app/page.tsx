@@ -57,9 +57,18 @@ interface DisputeState {
   winner: string;
 }
 
+const bradbury = {
+  ...testnetAsimov,
+  id: 4221,
+  rpcUrls: {
+    default: { http: ["https://zksync-os-testnet-genlayer.zksync.dev"] },
+    public: { http: ["https://zksync-os-testnet-genlayer.zksync.dev"] },
+  },
+};
+
 function makeClient() {
   const account = createAccount("0x352ad7479c57771f2bb7a1efdad1b24a57e8420e2ea4dc9ed8cf7cf465b3b8e5");
-  return { client: createClient({ chain: testnetAsimov, account }), account };
+  return { client: createClient({ chain: bradbury, account }), account };
 }
 
 async function writeContract(fn: string, args: (string | number | boolean | bigint)[]): Promise<boolean> {
@@ -681,7 +690,7 @@ export default function Home() {
 
       <footer className="poh-footer">
         <div className="poh-footer-logo"><Logo size={18} /><span className="poh-footer-name">Proof of Handshake</span></div>
-        <p className="poh-footer-right">Built on GenLayer · Onchain Justice Track · Bradbury Builders Hackathon 2026</p>
+        <p className="poh-footer-right">Built on GenLayer · Onchain Justice Track · Bradbury Builders Hackathon 2025</p>
       </footer>
     </main>
   );
