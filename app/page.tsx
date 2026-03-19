@@ -4,7 +4,7 @@ import { createClient, createAccount } from "genlayer-js";
 import { studionet } from "genlayer-js/chains";
 import { TransactionStatus } from "genlayer-js/types";
 
-const CONTRACT_ADDRESS = "0xeD99D46A13C0A1457497cb51F28eF7626Cea5Eab";
+const CONTRACT_ADDRESS = "0xbAdc0E3B89cC46132Ba1c1db3D7DC26Fd78386d0";
 
 /**
  * FLOW A — Starting a new dispute
