@@ -670,11 +670,7 @@ export default function Home() {
             <div className={`poh-verdict-banner ${dispute.winner==="tenant"?"poh-guest-wins":"poh-host-wins"}`}>
               <div className="poh-verdict-seal"><Logo size={52} /></div>
               <div className="poh-verdict-winner">{dispute.winner==="tenant"?"Guest Wins":"Host Wins"}</div>
-              <div className="poh-verdict-deposit">
-                {dispute.winner==="tenant"
-                  ? `Caution fee of ${dispute.deposit_amount} should be refunded to the guest`
-                  : `Host may retain caution fee of ${dispute.deposit_amount}`}
-              </div>
+              <div className="poh-verdict-deposit">{dispute.verdict}</div>
             </div>
             <div className="poh-verdict-cards">
               <div className="poh-vcard"><h3>📋 Ruling</h3><p>{dispute.verdict}</p></div>
@@ -715,7 +711,7 @@ export default function Home() {
 
       <footer className="poh-footer">
         <div className="poh-footer-logo"><Logo size={18} /><span className="poh-footer-name">Proof of Handshake</span></div>
-        <p className="poh-footer-right">Built on GenLayer · Onchain Justice Track · Bradbury Builders Hackathon 2026</p>
+        <p className="poh-footer-right">Built on GenLayer · Onchain Justice Track · Bradbury Builders Hackathon 2025</p>
       </footer>
     </main>
   );
