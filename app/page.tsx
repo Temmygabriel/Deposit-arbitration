@@ -1,7 +1,7 @@
 "use client";
 import { useState, useCallback } from "react";
 import { createClient, createAccount } from "genlayer-js";
-import { testnetBradbury } from "genlayer-js/chains";
+import { testnetAsimov } from "genlayer-js/chains";
 import { TransactionStatus } from "genlayer-js/types";
 
 const CONTRACT_ADDRESS = "0x73e7947D5fb2eC93d0C690D70e7Ec8521DD835E4";
@@ -27,7 +27,7 @@ interface DisputeState {
 
 function makeClient() {
   const account = createAccount();
-  return { client: createClient({ chain: testnetBradbury, account }), account };
+  return { client: createClient({ chain: testnetAsimov, account }), account };
 }
 
 async function writeContract(
@@ -420,7 +420,7 @@ export default function Home() {
 
       <footer className="poh-footer">
         <div className="poh-footer-logo"><Logo size={18} /><span className="poh-footer-name">Proof of Handshake</span></div>
-        <p className="poh-footer-right">Built on GenLayer · Onchain Justice Track · Bradbury Builders Hackathon 2025</p>
+        <p className="poh-footer-right">Built on GenLayer · Onchain Justice Track · Bradbury Builders Hackathon 2026</p>
       </footer>
     </main>
   );
