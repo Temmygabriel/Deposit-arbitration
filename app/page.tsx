@@ -57,13 +57,12 @@ interface DisputeState {
   winner: string;
 }
 
-const FUNDED_ADDRESS = "0xa881365a99d77be904e414ae610e22938bb0466d";
 const FUNDED_ACCOUNT = createAccount("0x352ad7479c57771f2bb7a1efdad1b24a57e8420e2ea4dc9ed8cf7cf465b3b8e5");
 
 function makeClient() {
   const client = createClient({
     chain: testnetBradbury,
-    account: FUNDED_ADDRESS as `0x${string}`,
+    account: FUNDED_ACCOUNT,
     endpoint: "https://zksync-os-testnet-genlayer.zksync.dev",
   } as any);
   return { client, account: FUNDED_ACCOUNT };
@@ -71,17 +70,19 @@ function makeClient() {
 
 async function writeContract(fn: string, args: (string | number | boolean | bigint)[]): Promise<boolean> {
   try {
-    const { client, account } = makeClient();
+    const { client } = makeClient();
     const hash = await (client as any).writeContract({
       address: CONTRACT_ADDRESS as `0x${string}`,
       functionName: fn,
       args,
       value: BigInt(0),
-      account,
     });
     await client.waitForTransactionReceipt({ hash, status: TransactionStatus.ACCEPTED, retries: 60, interval: 3000 });
     return true;
-  } catch { return false; }
+  } catch (err) {
+    console.error("writeContract error:", err);
+    return false;
+  }
 }
 
 async function readDispute(disputeId: number): Promise<DisputeState | null> {
@@ -689,7 +690,7 @@ export default function Home() {
 
       <footer className="poh-footer">
         <div className="poh-footer-logo"><Logo size={18} /><span className="poh-footer-name">Proof of Handshake</span></div>
-        <p className="poh-footer-right">Built on GenLayer · Onchain Justice Track · Bradbury Builders Hackathon 2026</p>
+        <p className="poh-footer-right">Built on GenLayer · Onchain Justice Track · Bradbury Builders Hackathon 2025</p>
       </footer>
     </main>
   );
