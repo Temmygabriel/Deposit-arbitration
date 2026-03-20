@@ -1,10 +1,11 @@
 "use client";
-import { useState, useCallback } from "react";
-import { createClient, createAccount } from "genlayer-js";
+import { useState, useCallback, useEffect } from "react";
+import { createClient } from "genlayer-js";
 import { testnetAsimov } from "genlayer-js/chains";
 import { TransactionStatus } from "genlayer-js/types";
 
 const CONTRACT_ADDRESS = "0x25f192AC05f481A83bc440652D057279eD1Eb4D9";
+const BRADBURY_CHAIN_ID = "0x107D"; // 4221 in hex
 
 /**
  * FLOW A — Starting a new dispute
@@ -15,11 +16,6 @@ const CONTRACT_ADDRESS = "0x25f192AC05f481A83bc440652D057279eD1Eb4D9";
  *
  * FLOW C — Coming back later (just have an ID)
  *   home → [enter ID] → status (smart screen detects everything)
- *
- * STATUS SCREEN is the smart hub. It reads the chain and shows:
- *   - "Other party hasn't responded" → reminder + Check Again button
- *   - "Both filed, no verdict yet" → Request Verdict button
- *   - "Verdict exists" → auto-navigates to verdict screen
  */
 type Screen =
   | "home"
@@ -57,27 +53,91 @@ interface DisputeState {
   winner: string;
 }
 
-const FUNDED_ACCOUNT = createAccount(process.env.NEXT_PUBLIC_FUNDED_KEY as `0x${string}`);
+// ── METAMASK HELPERS ──────────────────────────────────────────
 
-function makeClient() {
-  const client = createClient({
-    chain: testnetAsimov,
-    account: FUNDED_ACCOUNT,
-    endpoint: "https://zksync-os-testnet-genlayer.zksync.dev",
-  } as any);
-  return { client, account: FUNDED_ACCOUNT };
+async function switchToBradbury(): Promise<boolean> {
+  try {
+    await (window as any).ethereum.request({
+      method: "wallet_switchEthereumChain",
+      params: [{ chainId: BRADBURY_CHAIN_ID }],
+    });
+    return true;
+  } catch (switchError: any) {
+    if (switchError.code === 4902) {
+      try {
+        await (window as any).ethereum.request({
+          method: "wallet_addEthereumChain",
+          params: [{
+            chainId: BRADBURY_CHAIN_ID,
+            chainName: "GenLayer Bradbury Testnet",
+            nativeCurrency: { name: "GEN", symbol: "GEN", decimals: 18 },
+            rpcUrls: ["https://zksync-os-testnet-genlayer.zksync.dev"],
+            blockExplorerUrls: ["https://explorer-bradbury.genlayer.com/"],
+          }],
+        });
+        return true;
+      } catch { return false; }
+    }
+    return false;
+  }
 }
 
-async function writeContract(fn: string, args: (string | number | boolean | bigint)[]): Promise<boolean> {
+async function connectWallet(): Promise<string | null> {
   try {
-    const { client } = makeClient();
-    const hash = await (client as any).writeContract({
+    if (!(window as any).ethereum) return null;
+    const accounts = await (window as any).ethereum.request({ method: "eth_requestAccounts" });
+    await switchToBradbury();
+    return accounts[0] || null;
+  } catch { return null; }
+}
+
+async function getConnectedAccount(): Promise<string | null> {
+  try {
+    if (!(window as any).ethereum) return null;
+    const accounts = await (window as any).ethereum.request({ method: "eth_accounts" });
+    return accounts[0] || null;
+  } catch { return null; }
+}
+
+function makeReadClient() {
+  return createClient({
+    chain: testnetAsimov,
+    endpoint: "https://zksync-os-testnet-genlayer.zksync.dev",
+  } as any);
+}
+
+async function writeContract(
+  fn: string,
+  args: (string | number | boolean | bigint)[],
+  walletAddress: string
+): Promise<boolean> {
+  try {
+    await switchToBradbury();
+    const { createAccount } = await import("genlayer-js");
+    const account = createAccount(walletAddress as `0x${string}`);
+    const client = createClient({
+      chain: testnetAsimov,
+      account,
+      endpoint: "https://zksync-os-testnet-genlayer.zksync.dev",
+    } as any) as any;
+
+    // Override the sendTransaction to use MetaMask
+    const originalSend = client.transport?.request?.bind(client.transport);
+    
+    const hash = await client.writeContract({
       address: CONTRACT_ADDRESS as `0x${string}`,
       functionName: fn,
       args,
       value: BigInt(0),
+      account: walletAddress,
     });
-    await client.waitForTransactionReceipt({ hash, status: TransactionStatus.ACCEPTED, retries: 60, interval: 3000 });
+
+    await client.waitForTransactionReceipt({
+      hash,
+      status: TransactionStatus.ACCEPTED,
+      retries: 60,
+      interval: 3000,
+    });
     return true;
   } catch (err) {
     console.error("writeContract error:", err);
@@ -87,7 +147,7 @@ async function writeContract(fn: string, args: (string | number | boolean | bigi
 
 async function readDispute(disputeId: number): Promise<DisputeState | null> {
   try {
-    const { client } = makeClient();
+    const client = makeReadClient();
     const result = await client.readContract({
       address: CONTRACT_ADDRESS as `0x${string}`,
       functionName: "get_dispute",
@@ -101,7 +161,7 @@ async function readDispute(disputeId: number): Promise<DisputeState | null> {
 
 async function readDisputeCount(): Promise<number> {
   try {
-    const { client } = makeClient();
+    const client = makeReadClient();
     const result = await client.readContract({
       address: CONTRACT_ADDRESS as `0x${string}`,
       functionName: "get_dispute_count",
@@ -148,6 +208,8 @@ export default function Home() {
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
   const [verdictCopied, setVerdictCopied] = useState(false);
+  const [walletAddress, setWalletAddress] = useState<string | null>(null);
+  const [walletConnecting, setWalletConnecting] = useState(false);
 
   const [propertyAddress, setPropertyAddress] = useState("");
   const [depositAmount, setDepositAmount] = useState("");
@@ -158,6 +220,18 @@ export default function Home() {
   const [myClaim, setMyClaim] = useState("");
   const [myEvidence, setMyEvidence] = useState("");
   const [loadId, setLoadId] = useState("");
+
+  useEffect(() => {
+    getConnectedAccount().then(acc => { if (acc) setWalletAddress(acc); });
+  }, []);
+
+  const handleConnectWallet = async () => {
+    setWalletConnecting(true);
+    const acc = await connectWallet();
+    setWalletConnecting(false);
+    if (acc) { setWalletAddress(acc); setError(""); }
+    else setError("Could not connect wallet. Make sure MetaMask is installed.");
+  };
 
   const reset = useCallback(() => {
     setScreen("home"); setMyRole(null); setDisputeId(null); setDispute(null);
@@ -192,7 +266,16 @@ export default function Home() {
     }
   }, []);
 
+  const requireWallet = (): boolean => {
+    if (!walletAddress) {
+      setError("Please connect your MetaMask wallet first.");
+      return false;
+    }
+    return true;
+  };
+
   const handleCreateDispute = async () => {
+    if (!requireWallet()) return;
     if (!propertyAddress || !depositAmount || !hostName || !guestName || !agreementTerms) {
       setError("Please fill in all fields"); return;
     }
@@ -200,7 +283,7 @@ export default function Home() {
     const countBefore = await readDisputeCount();
     const ok = await writeContract("create_dispute", [
       propertyAddress, `${depositAmount} ${currency}`, hostName, guestName, agreementTerms
-    ]);
+    ], walletAddress!);
     if (!ok) { setError("Transaction failed. Please try again."); setLoading(false); return; }
     setDisputeId(countBefore + 1);
     setLoading(false);
@@ -208,11 +291,12 @@ export default function Home() {
   };
 
   const handleMyClaim = async () => {
+    if (!requireWallet()) return;
     if (!myClaim || !myEvidence) { setError("Please fill in both fields"); return; }
     if (!disputeId) return;
     setError(""); setLoading(true); setLoadingMsg("Sealing your claim onchain...");
     const fn = myRole === "host" ? "submit_landlord_claim" : "submit_tenant_claim";
-    const ok = await writeContract(fn, [disputeId, myClaim, myEvidence]);
+    const ok = await writeContract(fn, [disputeId, myClaim, myEvidence], walletAddress!);
     if (!ok) { setError("Transaction failed. Please try again."); setLoading(false); return; }
     setLoading(false);
     await checkStatus(disputeId);
@@ -241,11 +325,12 @@ export default function Home() {
   };
 
   const handleRespondClaim = async () => {
+    if (!requireWallet()) return;
     if (!myClaim || !myEvidence) { setError("Please fill in both fields"); return; }
     if (!disputeId) return;
     setError(""); setLoading(true); setLoadingMsg("Sealing your response onchain...");
     const fn = myRole === "host" ? "submit_landlord_claim" : "submit_tenant_claim";
-    const ok = await writeContract(fn, [disputeId, myClaim, myEvidence]);
+    const ok = await writeContract(fn, [disputeId, myClaim, myEvidence], walletAddress!);
     if (!ok) { setError("Transaction failed. Please try again."); setLoading(false); return; }
     setLoading(false);
     await checkStatus(disputeId);
@@ -261,10 +346,11 @@ export default function Home() {
   };
 
   const handleRequestVerdict = async () => {
+    if (!requireWallet()) return;
     if (!disputeId) return;
     setError(""); setLoading(true);
     setLoadingMsg("5 AI validators are reading both sides... this takes 30–60 seconds");
-    const ok = await writeContract("request_verdict", [disputeId]);
+    const ok = await writeContract("request_verdict", [disputeId], walletAddress!);
     if (!ok) { setError("Transaction failed. Please try again."); setLoading(false); return; }
     setLoadingMsg("Reading verdict from chain...");
     const state = await readDispute(disputeId);
@@ -287,12 +373,19 @@ export default function Home() {
   const myIcon = myRole === "host" ? "🏠" : "👤";
   const knownRole = !!myRole;
 
+  const walletBtn = walletAddress
+    ? <span className="poh-wallet-connected">🟢 {walletAddress.slice(0,6)}...{walletAddress.slice(-4)}</span>
+    : <button className="poh-btn-outline poh-wallet-btn" onClick={handleConnectWallet} disabled={walletConnecting}>
+        {walletConnecting ? "Connecting..." : "🦊 Connect Wallet"}
+      </button>;
+
   return (
     <main className="poh-main">
       <nav className="poh-nav">
         <div className="poh-nav-inner">
           <div className="poh-logo" onClick={reset}><Logo size={28} /><span className="poh-logo-name">Proof of Handshake</span></div>
           <div className="poh-nav-right">
+            {walletBtn}
             {screen !== "home" && <button className="poh-btn-ghost" onClick={reset}>← Home</button>}
             {screen === "home" && <button className="poh-btn-red" onClick={() => setScreen("role_select")}>File a Dispute →</button>}
           </div>
@@ -399,6 +492,15 @@ export default function Home() {
               <h2 className="poh-form-title">Who are you?</h2>
               <p className="poh-form-sub">Select your role, then choose your path below.</p>
             </div>
+            {!walletAddress && (
+              <div className="poh-card" style={{marginBottom:"1.5rem", textAlign:"center"}}>
+                <p style={{marginBottom:"1rem", color:"var(--muted2)"}}>You need a MetaMask wallet to file or respond to disputes.</p>
+                <button className="poh-btn-red" onClick={handleConnectWallet} disabled={walletConnecting}>
+                  {walletConnecting ? "Connecting..." : "🦊 Connect MetaMask"}
+                </button>
+                {error && <p className="poh-error" style={{marginTop:"0.75rem"}}>{error}</p>}
+              </div>
+            )}
             <div className="poh-role-grid">
               <button className={`poh-role-card poh-role-host ${myRole === "host" ? "poh-role-active-host" : ""}`} onClick={() => { setMyRole("host"); setError(""); }}>
                 <span className="poh-role-icon">🏠</span>
@@ -552,7 +654,6 @@ export default function Home() {
         {/* ── STATUS SCREEN ── */}
         {screen === "status" && (
           <div className="poh-form-wrap">
-
             {disputeStatus === "waiting_other" && (
               <>
                 <div className="poh-form-hdr">
@@ -639,7 +740,6 @@ export default function Home() {
                 </div>
               </>
             )}
-
           </div>
         )}
 
