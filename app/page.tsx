@@ -58,11 +58,12 @@ async function writeContract(fn: string, args: (string | number | boolean | bigi
   try {
     const { client } = makeClient();
     const hash = await (client as any).writeContract({
-      address: CONTRACT_ADDRESS as `0x${string}`,
-      functionName: fn,
-      args,
-      value: BigInt(0),
-    });
+  address: CONTRACT_ADDRESS as `0x${string}`,
+  functionName: fn,
+  args,
+  value: BigInt(0),
+  gas: BigInt(500000),
+});
     await client.waitForTransactionReceipt({ hash, status: TransactionStatus.ACCEPTED, retries: 60, interval: 3000 });
     return true;
   } catch (err) {
