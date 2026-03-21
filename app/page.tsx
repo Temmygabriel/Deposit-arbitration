@@ -1,26 +1,12 @@
 "use client";
 import { useState, useCallback } from "react";
 import { createClient, createAccount } from "genlayer-js";
-import { studionet } from "genlayer-js/chains";
+import { testnetAsimov } from "genlayer-js/chains";
 import { TransactionStatus } from "genlayer-js/types";
 
-const CONTRACT_ADDRESS = "0xeD99D46A13C0A1457497cb51F28eF7626Cea5Eab";
+const CONTRACT_ADDRESS = "0x15CE73389b3c58aF495efb8F11e48115AeA95684";
+const PRIVATE_KEY = "0x352ad7479c57771f2bb7a1efdad1b24a57e8420e2ea4dc9ed8cf7cf465b3b8e5";
 
-/**
- * FLOW A — Starting a new dispute
- *   home → role_select → create → my_claim → status
- *
- * FLOW B — Responding to existing dispute
- *   home → role_select → [enter ID] → respond_claim → status
- *
- * FLOW C — Coming back later (just have an ID)
- *   home → [enter ID] → status (smart screen detects everything)
- *
- * STATUS SCREEN is the smart hub. It reads the chain and shows:
- *   - "Other party hasn't responded" → reminder + Check Again button
- *   - "Both filed, no verdict yet" → Request Verdict button
- *   - "Verdict exists" → auto-navigates to verdict screen
- */
 type Screen =
   | "home"
   | "role_select"
@@ -57,24 +43,32 @@ interface DisputeState {
   winner: string;
 }
 
+const FUNDED_ACCOUNT = createAccount(PRIVATE_KEY as `0x${string}`);
+
 function makeClient() {
-  const account = createAccount();
-  return { client: createClient({ chain: studionet, account }), account };
+  const client = createClient({
+    chain: testnetAsimov,
+    account: FUNDED_ACCOUNT,
+    endpoint: "https://zksync-os-testnet-genlayer.zksync.dev",
+  } as any);
+  return { client, account: FUNDED_ACCOUNT };
 }
 
 async function writeContract(fn: string, args: (string | number | boolean | bigint)[]): Promise<boolean> {
   try {
     const { client } = makeClient();
-    const hash = await client.writeContract({
+    const hash = await (client as any).writeContract({
       address: CONTRACT_ADDRESS as `0x${string}`,
       functionName: fn,
       args,
       value: BigInt(0),
-      leaderOnly: true,
     });
     await client.waitForTransactionReceipt({ hash, status: TransactionStatus.ACCEPTED, retries: 60, interval: 3000 });
     return true;
-  } catch { return false; }
+  } catch (err) {
+    console.error("writeContract error:", err);
+    return false;
+  }
 }
 
 async function readDispute(disputeId: number): Promise<DisputeState | null> {
