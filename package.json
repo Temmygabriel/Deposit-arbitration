@@ -9,7 +9,7 @@
     "lint": "next lint"
   },
   "dependencies": {
-    "genlayer-js": "latest",
+    "genlayer-js": "0.23.1",
     "next": "15.2.6",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
