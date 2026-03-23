@@ -4,17 +4,8 @@ import { createClient, createAccount } from "genlayer-js";
 import { testnetBradbury } from "genlayer-js/chains";
 import { TransactionStatus } from "genlayer-js/types";
 
-const CONTRACT_ADDRESS = "0x7e9C96266d8BD6dc9a06CB74F2C7ECcf854ea8b5";
+const CONTRACT_ADDRESS = "0x295B9044690fda24452AbDe884899EF31c1491d0";
 const PRIVATE_KEY = "0x352ad7479c57771f2bb7a1efdad1b24a57e8420e2ea4dc9ed8cf7cf465b3b8e5";
-
-function makeClient() {
-  const account = createAccount(PRIVATE_KEY);
-  const client = createClient({
-    chain: testnetBradbury,
-    account,
-  });
-  return { client, account };
-}
 
 type Screen =
   | "home"
@@ -50,6 +41,15 @@ interface DisputeState {
   verdict: string;
   reasoning: string;
   winner: string;
+}
+
+function makeClient() {
+  const account = createAccount(PRIVATE_KEY);
+  const client = createClient({
+    chain: testnetBradbury,
+    account,
+  });
+  return { client, account };
 }
 
 async function writeContract(fn: string, args: (string | number | boolean | bigint)[]): Promise<boolean> {
@@ -247,7 +247,18 @@ export default function Home() {
 
   const handleRequestVerdict = async () => {
     if (!disputeId) return;
-    setError(""); setLoading(true);
+
+    // Guard: re-read state before calling to avoid revert on already-resolved disputes
+    setLoading(true); setLoadingMsg("Checking dispute status...");
+    const latest = await readDispute(disputeId);
+    if (latest?.status === "resolved") {
+      setDispute(latest);
+      setLoading(false);
+      setScreen("verdict");
+      return;
+    }
+
+    setError("");
     setLoadingMsg("5 AI validators are reading both sides... this takes 30–60 seconds");
     const ok = await writeContract("request_verdict", [disputeId]);
     if (!ok) { setError("Transaction failed. Please try again."); setLoading(false); return; }
@@ -635,8 +646,8 @@ export default function Home() {
               <div className="poh-verdict-deposit">{dispute.verdict}</div>
             </div>
             <div className="poh-verdict-cards">
-              <div className="poh-vcard"><h3>📋 Ruling</h3><p>{dispute.verdict}</p></div>
-              <div className="poh-vcard"><h3>🧠 AI Reasoning</h3><p className="poh-verdict-quote-sm">&ldquo;{dispute.reasoning}&rdquo;</p></div>
+              <div className="poh-vcard"><h3>📋 Ruling</h3><p>{dispute.verdict || "No ruling text recorded."}</p></div>
+              <div className="poh-vcard"><h3>🧠 AI Reasoning</h3><p className="poh-verdict-quote-sm">&ldquo;{dispute.reasoning || "No reasoning recorded."}&rdquo;</p></div>
               <div className="poh-vcard">
                 <h3>📁 Dispute Details</h3>
                 <div className="poh-details-grid">
@@ -673,7 +684,7 @@ export default function Home() {
 
       <footer className="poh-footer">
         <div className="poh-footer-logo"><Logo size={18} /><span className="poh-footer-name">Proof of Handshake</span></div>
-        <p className="poh-footer-right">Built on GenLayer · Onchain Justice Track · Bradbury Builders Hackathon 2025</p>
+        <p className="poh-footer-right">Built on GenLayer · Onchain Justice Track · Bradbury Builders Hackathon 2026</p>
       </footer>
     </main>
   );
