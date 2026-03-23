@@ -52,16 +52,6 @@ interface DisputeState {
   winner: string;
 }
 
-function makeClient() {
-  const account = createAccount();
-  const client = createClient({
-    chain: studionet,
-    account,
-    endpoint: "https://zksync-os-testnet-genlayer.zksync.dev",
-  } as any);
-  return { client, account };
-}
-
 async function writeContract(fn: string, args: (string | number | boolean | bigint)[]): Promise<boolean> {
   try {
     const { client } = makeClient();
