@@ -52,23 +52,58 @@ function makeClient() {
   return { client, account };
 }
 
-async function writeContract(fn: string, args: (string | number | boolean | bigint)[]): Promise<boolean> {
-  try {
-    const { client } = makeClient();
-    const hash = await client.writeContract({
-      address: CONTRACT_ADDRESS as `0x${string}`,
-      functionName: fn,
-      args,
-      value: BigInt(0),
-      leaderOnly: false,
-    } as any);
-    await client.waitForTransactionReceipt({ hash, status: TransactionStatus.ACCEPTED, retries: 60, interval: 3000 });
-    return true;
-  } catch (err) {
-    console.error("writeContract error:", err);
-    return false;
+async function writeContract(
+  fn: string,
+  args: (string | number | boolean | bigint)[]
+): Promise<boolean> {
+  const MAX_ATTEMPTS = 5;
+
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      const { client } = makeClient();
+      console.log(`writeContract attempt ${attempt}/${MAX_ATTEMPTS}: ${fn}`);
+
+      const hash = await client.writeContract({
+        address: CONTRACT_ADDRESS as `0x${string}`,
+        functionName: fn,
+        args,
+        value: BigInt(0),
+        leaderOnly: false,
+        consensusMaxRotations: 10,
+      } as any);
+
+      await client.waitForTransactionReceipt({
+        hash,
+        status: TransactionStatus.ACCEPTED,
+        retries: 120,
+        interval: 5000,
+      });
+
+      return true;
+    } catch (err: any) {
+      const msg = err?.message || "";
+      const isRetryable =
+        msg.includes("not processed by consensus") ||
+        msg.includes("LEADER_TIMEOUT") ||
+        msg.includes("timeout");
+
+      console.error(`Attempt ${attempt} failed:`, msg);
+
+      if (isRetryable && attempt < MAX_ATTEMPTS) {
+        const wait = attempt * 5000; // 5s, 10s, 15s, 20s
+        console.log(`Retryable error. Waiting ${wait/1000}s before retry...`);
+        await new Promise((r) => setTimeout(r, wait));
+        continue;
+      }
+
+      return false;
+    }
   }
+
+  return false;
 }
+
+
 
 async function readDispute(disputeId: number): Promise<DisputeState | null> {
   try {
