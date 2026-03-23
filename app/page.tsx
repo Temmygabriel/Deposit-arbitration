@@ -1,10 +1,20 @@
 "use client";
 import { useState, useCallback } from "react";
 import { createClient, createAccount } from "genlayer-js";
-import { studionet } from "genlayer-js/chains";
+import { testnetBradbury } from "genlayer-js/chains";
 import { TransactionStatus } from "genlayer-js/types";
 
 const CONTRACT_ADDRESS = "0x7e9C96266d8BD6dc9a06CB74F2C7ECcf854ea8b5";
+const PRIVATE_KEY = "0x352ad7479c57771f2bb7a1efdad1b24a57e8420e2ea4dc9ed8cf7cf465b3b8e5";
+
+function makeClient() {
+  const account = createAccount(PRIVATE_KEY);
+  const client = createClient({
+    chain: testnetBradbury,
+    account,
+  });
+  return { client, account };
+}
 
 type Screen =
   | "home"
