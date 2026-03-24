@@ -90,8 +90,8 @@ async function writeContract(
       console.error(`Attempt ${attempt} failed:`, msg);
 
       if (isRetryable && attempt < MAX_ATTEMPTS) {
-        const wait = attempt * 5000; // 5s, 10s, 15s, 20s
-        console.log(`Retryable error. Waiting ${wait/1000}s before retry...`);
+        const wait = attempt * 5000;
+        console.log(`Retryable error. Waiting ${wait / 1000}s before retry...`);
         await new Promise((r) => setTimeout(r, wait));
         continue;
       }
@@ -102,8 +102,6 @@ async function writeContract(
 
   return false;
 }
-
-
 
 async function readDispute(disputeId: number): Promise<DisputeState | null> {
   try {
@@ -137,6 +135,40 @@ function getDisputeStatus(state: DisputeState): DisputeStatus {
   const guestFiled = !!(state.tenant_claim && state.tenant_claim.length > 0);
   if (hostFiled && guestFiled) return "ready_verdict";
   return "waiting_other";
+}
+
+// Robust winner detection — reads both winner field and verdict text
+// so wrong/ambiguous AI output doesn't show the wrong banner
+function resolveWinner(dispute: DisputeState): "guest" | "host" {
+  const w = dispute.winner?.toLowerCase() || "";
+  const v = dispute.verdict?.toLowerCase() || "";
+
+  const guestWon =
+    w.includes("tenant") ||
+    w.includes("guest") ||
+    (v.includes("guest") && (
+      v.includes("refund") ||
+      v.includes("favour") ||
+      v.includes("favor") ||
+      v.includes("entitled") ||
+      v.includes("wins") ||
+      v.includes("obligated")
+    ));
+
+  const hostWon =
+    w.includes("landlord") ||
+    w.includes("host") ||
+    (v.includes("host") && (
+      v.includes("withhold") ||
+      v.includes("retain") ||
+      v.includes("justified") ||
+      v.includes("wins") ||
+      v.includes("entitled")
+    ));
+
+  // Host wins only if host keywords match AND guest keywords don't
+  if (hostWon && !guestWon) return "host";
+  return "guest";
 }
 
 function Logo({ size = 32 }: { size?: number }) {
@@ -283,7 +315,6 @@ export default function Home() {
   const handleRequestVerdict = async () => {
     if (!disputeId) return;
 
-    // Guard: re-read state before calling to avoid revert on already-resolved disputes
     setLoading(true); setLoadingMsg("Checking dispute status...");
     const latest = await readDispute(disputeId);
     if (latest?.status === "resolved") {
@@ -307,7 +338,8 @@ export default function Home() {
   };
 
   const copyVerdictLink = () => {
-    const txt = `Proof of Handshake — Dispute #${disputeId}\nVerdict: ${dispute?.winner === "tenant" ? "GUEST WINS" : "HOST WINS"}\nRuling: ${dispute?.verdict}\nDispute ID: ${disputeId}\nSite: ${typeof window !== "undefined" ? window.location.origin : ""}`;
+    const winner = dispute ? resolveWinner(dispute) : "guest";
+    const txt = `Proof of Handshake — Dispute #${disputeId}\nVerdict: ${winner === "guest" ? "GUEST WINS" : "HOST WINS"}\nRuling: ${dispute?.verdict}\nDispute ID: ${disputeId}\nSite: ${typeof window !== "undefined" ? window.location.origin : ""}`;
     navigator.clipboard.writeText(txt);
     setVerdictCopied(true); setTimeout(() => setVerdictCopied(false), 2500);
   };
@@ -673,47 +705,50 @@ export default function Home() {
         )}
 
         {/* ── VERDICT ── */}
-        {screen === "verdict" && dispute && (
-          <div className="poh-verdict-screen">
-            <div className={`poh-verdict-banner ${dispute.winner==="tenant"?"poh-guest-wins":"poh-host-wins"}`}>
-              <div className="poh-verdict-seal"><Logo size={52} /></div>
-              <div className="poh-verdict-winner">{dispute.winner==="tenant"?"Guest Wins":"Host Wins"}</div>
-              <div className="poh-verdict-deposit">{dispute.verdict}</div>
+        {screen === "verdict" && dispute && (() => {
+          const winner = resolveWinner(dispute);
+          return (
+            <div className="poh-verdict-screen">
+              <div className={`poh-verdict-banner ${winner === "guest" ? "poh-guest-wins" : "poh-host-wins"}`}>
+                <div className="poh-verdict-seal"><Logo size={52} /></div>
+                <div className="poh-verdict-winner">{winner === "guest" ? "Guest Wins" : "Host Wins"}</div>
+                <div className="poh-verdict-deposit">{dispute.verdict}</div>
+              </div>
+              <div className="poh-verdict-cards">
+                <div className="poh-vcard"><h3>📋 Ruling</h3><p>{dispute.verdict || "No ruling text recorded."}</p></div>
+                <div className="poh-vcard"><h3>🧠 AI Reasoning</h3><p className="poh-verdict-quote-sm">&ldquo;{dispute.reasoning || "No reasoning recorded."}&rdquo;</p></div>
+                <div className="poh-vcard">
+                  <h3>📁 Dispute Details</h3>
+                  <div className="poh-details-grid">
+                    <span className="poh-dl">Property</span><span className="poh-dv">{dispute.property_address}</span>
+                    <span className="poh-dl">Caution Fee</span><span className="poh-dv">{dispute.deposit_amount}</span>
+                    <span className="poh-dl">Host</span><span className="poh-dv">{dispute.landlord_name}</span>
+                    <span className="poh-dl">Guest</span><span className="poh-dv">{dispute.tenant_name}</span>
+                    <span className="poh-dl">Dispute ID</span><span className="poh-dv poh-id-badge">#{dispute.dispute_id}</span>
+                    <span className="poh-dl">Status</span><span className="poh-dv poh-resolved">✅ Resolved Onchain</span>
+                  </div>
+                </div>
+                <div className="poh-vcard poh-consensus-card">
+                  <h3>🔗 Onchain Consensus</h3>
+                  <p>This verdict was reached by 5 independent AI validators on GenLayer&apos;s Bradbury testnet — transparent, auditable, and tamper-proof.</p>
+                  <div className="poh-chips" style={{marginTop:"1rem"}}>
+                    {["GPT-5.1 ✓","Grok-4 ✓","Qwen3-235b ✓","Claude Sonnet ✓","Majority Agree ✓"].map(c=><span key={c} className="poh-chip-agree">{c}</span>)}
+                  </div>
+                  <div className="poh-contract-ref">Contract: <span className="poh-mono">{CONTRACT_ADDRESS.slice(0,10)}...{CONTRACT_ADDRESS.slice(-6)}</span></div>
+                </div>
+                <div className="poh-vcard poh-share-verdict-card">
+                  <h3>📤 Share This Verdict</h3>
+                  <p style={{fontSize:"0.82rem", color:"var(--muted2)", marginBottom:"1rem"}}>Both parties can view this result using Dispute ID <strong className="poh-id-badge">#{dispute.dispute_id}</strong>.</p>
+                  <div style={{display:"flex", gap:"0.75rem", flexWrap:"wrap"}}>
+                    <button className="poh-btn-outline" onClick={copyVerdictLink}>{verdictCopied ? "✓ Copied!" : "📋 Copy verdict summary"}</button>
+                    <button className="poh-btn-ghost" onClick={() => window.print()}>🖨️ Print / Save as PDF</button>
+                  </div>
+                </div>
+              </div>
+              <button className="poh-btn-red" onClick={reset}>File Another Dispute →</button>
             </div>
-            <div className="poh-verdict-cards">
-              <div className="poh-vcard"><h3>📋 Ruling</h3><p>{dispute.verdict || "No ruling text recorded."}</p></div>
-              <div className="poh-vcard"><h3>🧠 AI Reasoning</h3><p className="poh-verdict-quote-sm">&ldquo;{dispute.reasoning || "No reasoning recorded."}&rdquo;</p></div>
-              <div className="poh-vcard">
-                <h3>📁 Dispute Details</h3>
-                <div className="poh-details-grid">
-                  <span className="poh-dl">Property</span><span className="poh-dv">{dispute.property_address}</span>
-                  <span className="poh-dl">Caution Fee</span><span className="poh-dv">{dispute.deposit_amount}</span>
-                  <span className="poh-dl">Host</span><span className="poh-dv">{dispute.landlord_name}</span>
-                  <span className="poh-dl">Guest</span><span className="poh-dv">{dispute.tenant_name}</span>
-                  <span className="poh-dl">Dispute ID</span><span className="poh-dv poh-id-badge">#{dispute.dispute_id}</span>
-                  <span className="poh-dl">Status</span><span className="poh-dv poh-resolved">✅ Resolved Onchain</span>
-                </div>
-              </div>
-              <div className="poh-vcard poh-consensus-card">
-                <h3>🔗 Onchain Consensus</h3>
-                <p>This verdict was reached by 5 independent AI validators on GenLayer&apos;s Bradbury testnet — transparent, auditable, and tamper-proof.</p>
-                <div className="poh-chips" style={{marginTop:"1rem"}}>
-                  {["GPT-5.1 ✓","Grok-4 ✓","Qwen3-235b ✓","Claude Sonnet ✓","Majority Agree ✓"].map(c=><span key={c} className="poh-chip-agree">{c}</span>)}
-                </div>
-                <div className="poh-contract-ref">Contract: <span className="poh-mono">{CONTRACT_ADDRESS.slice(0,10)}...{CONTRACT_ADDRESS.slice(-6)}</span></div>
-              </div>
-              <div className="poh-vcard poh-share-verdict-card">
-                <h3>📤 Share This Verdict</h3>
-                <p style={{fontSize:"0.82rem", color:"var(--muted2)", marginBottom:"1rem"}}>Both parties can view this result using Dispute ID <strong className="poh-id-badge">#{dispute.dispute_id}</strong>.</p>
-                <div style={{display:"flex", gap:"0.75rem", flexWrap:"wrap"}}>
-                  <button className="poh-btn-outline" onClick={copyVerdictLink}>{verdictCopied ? "✓ Copied!" : "📋 Copy verdict summary"}</button>
-                  <button className="poh-btn-ghost" onClick={() => window.print()}>🖨️ Print / Save as PDF</button>
-                </div>
-              </div>
-            </div>
-            <button className="poh-btn-red" onClick={reset}>File Another Dispute →</button>
-          </div>
-        )}
+          );
+        })()}
 
       </div>
 
