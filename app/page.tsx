@@ -5,7 +5,7 @@ import { testnetBradbury } from "genlayer-js/chains";
 import { TransactionStatus } from "genlayer-js/types";
 
 const CONTRACT_ADDRESS = "0x7e9C96266d8BD6dc9a06CB74F2C7ECcf854ea8b5";
-const account = createAccount(PRIVATE_KEY as `0x${string}`);
+const account = createAccount(process.env.NEXT_PUBLIC_FUNDED_KEY as `0x${string}`);
 
 type Screen =
   | "home"
