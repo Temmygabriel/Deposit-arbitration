@@ -43,8 +43,8 @@ interface DisputeState {
   winner: string;
 }
 
-function makeClient() {
-  const account = createAccount(PRIVATE_KEY);
+  function makeClient() {
+  const account = createAccount(process.env.NEXT_PUBLIC_FUNDED_KEY as `0x${string}`);
   const client = createClient({
     chain: testnetBradbury,
     account,
