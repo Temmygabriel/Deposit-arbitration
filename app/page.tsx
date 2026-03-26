@@ -58,7 +58,7 @@ interface CaseState {
 }
 
 function makeClient() {
-  const account = createAccount(PRIVATE_KEY);
+  const account = createAccount(PRIVATE_KEY as `0x${string}`);
   const client = createClient({ chain: testnetBradbury, account });
   return { client, account };
 }
